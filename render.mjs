@@ -44,6 +44,10 @@ export function renderBody(data) {
   .adx-daterow label{font-size:0.8rem;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;}
   .adx-daterow input[type=date]{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:inherit;font-size:0.8rem;color:var(--text-primary);color-scheme:light dark;}
   .adx-daterow .rng{margin-left:auto;font-size:0.8rem;color:var(--text-muted);}
+  .adx-daterow #adx-refresh[disabled]{opacity:0.6;cursor:default;}
+  .adx-refresh-msg{margin:-12px 0 20px;font-size:0.82rem;padding:9px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-secondary);}
+  .adx-refresh-msg.err{border-color:var(--series-test);color:var(--text-primary);}
+  .adx-refresh-msg.ok{border-color:var(--good);}
 
   .adx-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px;}
   @media (max-width:900px){.adx-kpis{grid-template-columns:repeat(2,1fr);}}
@@ -118,7 +122,9 @@ export function renderBody(data) {
     <label>From <input type="date" id="adx-from"></label>
     <label>To <input type="date" id="adx-to"></label>
     <span class="rng" id="adx-rnglabel"></span>
+    <button class="adx-linkbtn" id="adx-refresh" title="Pull fresh data from GoHighLevel and rebuild (works on the deployed app when a GHL token is configured)">↻ Refresh from GHL</button>
   </div>
+  <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
 
   <div class="adx-kpis" id="adx-kpis"></div>
   <div class="adx-callout" id="adx-callout"></div>
@@ -223,6 +229,28 @@ export function renderBody(data) {
   fromEl.onchange=function(){from=fromEl.value||null;setPreset(null);render();};
   toEl.onchange=function(){to=toEl.value||null;setPreset(null);render();};
   function inRange(d){ if(!d)return (!from&&!to); if(from&&d<from)return false; if(to&&d>to)return false; return true; }
+
+  // ---------- manual refresh (POST /refresh on the deployed server) ----------
+  var refreshBtn=document.getElementById('adx-refresh');
+  var refreshMsg=document.getElementById('adx-refresh-msg');
+  function showMsg(text,cls){ refreshMsg.hidden=false; refreshMsg.className='adx-refresh-msg'+(cls?' '+cls:''); refreshMsg.textContent=text; }
+  refreshBtn.onclick=function(){
+    refreshBtn.disabled=true; var old=refreshBtn.textContent; refreshBtn.textContent='↻ Refreshing…';
+    showMsg('Pulling fresh data from GoHighLevel — this takes ~30–60 seconds…');
+    fetch('/refresh',{method:'POST'})
+      .then(function(r){return r.json().catch(function(){return {ok:false};});})
+      .then(function(j){
+        if(j&&j.ok){ showMsg('Updated. Reloading with the latest numbers…','ok'); setTimeout(function(){location.reload();},700); return; }
+        refreshBtn.disabled=false; refreshBtn.textContent=old;
+        if(j&&j.skipped){ showMsg('Refresh isn\\u2019t enabled: '+j.skipped+'. Add GHL_API_TOKEN in Railway (Variables tab) to turn it on.','err'); }
+        else if(j&&j.error){ showMsg('Refresh failed: '+j.error,'err'); }
+        else { showMsg('Refresh failed. Check the service logs in Railway.','err'); }
+      })
+      .catch(function(){
+        refreshBtn.disabled=false; refreshBtn.textContent=old;
+        showMsg('Manual refresh only works on the deployed app (the Node server on Railway), not when opening the HTML file or the preview directly.','err');
+      });
+  };
 
   // ---------- watchlist (active ads) ----------
   var LSKEY='adx_watchlist';
