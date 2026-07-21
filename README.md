@@ -18,12 +18,21 @@ service (see **Deploying on Railway** below).
 
 ## What the dashboard shows
 
-- **KPI tiles** — total leads, appointments booked (and the % of leads that booked),
-  VA appointments, Turning 65 appointments, and sales (with % of leads and close rate).
-- **Which ads to scale** — appointment booking rate per ad, highest first, colored by
-  ad family (Winning / Test / AI Test / Other). A "min leads" slider hides low-volume
-  ads so the ranking isn't dominated by ads with only a handful of leads.
-- **Full breakdown** — a sortable, searchable table of every ad creative with:
+- **Date range** — presets (last 7/30/90 days, this month/quarter, year to date) plus a
+  custom From/To. Everything below recomputes for the selected range. Leads, appointments
+  and sales are all counted by the **lead's creation date** (a clean cohort view: of the
+  leads that came in during this window, how many booked and sold).
+- **KPI tiles** — leads, appointments booked (+ % of leads), VA appointments, Turning 65
+  appointments, and sales. The Sales tile shows the **total** (e.g. `73`) and splits it into
+  *from ads* vs *no ad creative* so it reconciles with GHL's overall sale count.
+- **Active ads** — your watchlist of currently-running ads with their live leads/appts/sales.
+  Add the exact Ad Creative value from GHL and its counts link automatically; remove with ×.
+  Seeded from `config.json` and saved per-browser in localStorage (see **Active ads** below).
+- **Which ads to scale** — ads ranked by the metric you choose: **Appt rate**, **Sales**, or
+  **Sale rate**. Colored by ad family (Winning / Test / AI Test / Other). "Active ads only"
+  and a "min leads" slider cut the noise.
+- **Full breakdown** — a sortable, searchable table of every ad creative (★ marks active
+  ads), plus a `(No Ad Creative)` row so the sales total reconciles:
 
   | Column | Meaning |
   |--------|---------|
@@ -38,6 +47,25 @@ service (see **Deploying on Railway** below).
   | Close % | Sales ÷ Appts booked |
 
 Cancelled and deleted calendar events are excluded from the appointment counts.
+
+## Active ads (`config.json`)
+
+`config.json` holds the ads you're currently running:
+
+```json
+{ "activeAds": ["Winning Ad Non SAC | Never Free", "AI | Test ad | Still Working 1", ...] }
+```
+
+These names must match the **Ad Creative** custom-field value in GHL **exactly** — including
+spacing and capitalization — because attribution is a literal string match. The dashboard
+flags any active-ad name that matches zero contacts (⚠ on the chip) so typos are easy to spot.
+
+Two ways to manage the list:
+
+- **In the browser** (fastest) — use the *Active ads* panel to add/remove. Changes save to
+  that browser's localStorage. Good for launching a new test ad and watching it immediately.
+- **In the repo** (shared defaults) — edit `config.json` and redeploy. This is what everyone
+  sees before they make personal tweaks, and what a fresh browser starts from.
 
 ## Refreshing with live data
 
@@ -123,7 +151,8 @@ snapshot — deploys never fail for a missing token.
 | `server.mjs` | Web server for deployment (Railway). Serves the dashboard + optional live refresh. |
 | `data/dashboard_data.json` | The aggregated numbers behind the dashboard. |
 | `build-dashboard.mjs` | Pulls live data from GoHighLevel and regenerates everything. |
-| `render.mjs` | Turns aggregated data into the HTML (shared by the build script). |
+| `render.mjs` | Turns the dataset into the HTML (shared by the build script). |
+| `config.json` | Your active-ads list (shared defaults). |
 | `railway.json` | Railway build/deploy config. |
 
 ## Notes
