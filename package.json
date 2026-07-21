@@ -4,8 +4,9 @@
   "description": "Ad Creative performance dashboard for Mohr Insurance — tracks VA + Turning 65 appointments and sales by ad, from GoHighLevel.",
   "type": "module",
   "scripts": {
+    "start": "node server.mjs",
     "build": "node build-dashboard.mjs",
-    "serve": "http-server -c-1 -o dashboard.html"
+    "serve": "node server.mjs"
   },
   "engines": {
     "node": ">=18"

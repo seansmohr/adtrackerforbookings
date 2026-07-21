@@ -13,7 +13,8 @@ Data comes from GoHighLevel:
   (e.g. `Sale (MA)`, `Sale (MedSupp)`, …).
 
 Open **`dashboard.html`** in any browser. It is a single self-contained file — no
-server, no build step needed just to view it.
+server, no build step needed just to view it. Deployed, it runs as a small web
+service (see **Deploying on Railway** below).
 
 ## What the dashboard shows
 
@@ -79,14 +80,51 @@ Discovered for the Mohr Insurance sub-account and hard-coded as defaults in
 | VA Calendar | `iDBM1sRSqiZBWhblcGPD` |
 | Turning 65 Medicare Call | `jDfKPflpQai5OB0v7m0C` |
 
+## Deploying on Railway
+
+The repo is a self-contained Node service (zero npm dependencies — it uses only
+built-in modules and Node 18+'s global `fetch`). Railway deploys it on every push
+to `main`:
+
+1. **New Project → Deploy from GitHub repo** → pick this repo.
+2. Railway auto-detects Node (Nixpacks) and runs `npm start`, which starts
+   `server.mjs`. `railway.json` pins the start command and a `/health` check.
+3. **Generate a domain** under the service's *Settings → Networking*.
+
+The service listens on Railway's `$PORT` and serves:
+
+| Route | What |
+|-------|------|
+| `GET /` | the dashboard |
+| `GET /data/dashboard_data.json` | the aggregated numbers |
+| `GET /health` | health check (used by Railway) |
+| `POST /refresh` | rebuild the data on demand (needs a token) |
+
+### Live data on Railway (optional)
+
+Out of the box the service serves the committed snapshot. To make it self-update,
+add these **service Variables** in Railway:
+
+| Variable | Value |
+|----------|-------|
+| `GHL_API_TOKEN` | your GoHighLevel Private Integration token (see below) |
+| `GHL_LOCATION_ID` | `dTtT96ODx29mbQcdOp0v` (already the default) |
+| `REFRESH_HOURS` | optional, default `6` — auto-refresh interval; `0` disables |
+
+With a token set, the service pulls fresh data on boot and every `REFRESH_HOURS`,
+and `POST /refresh` forces an immediate rebuild. Without one, it just serves the
+snapshot — deploys never fail for a missing token.
+
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `dashboard.html` | The rendered dashboard — open this. |
+| `server.mjs` | Web server for deployment (Railway). Serves the dashboard + optional live refresh. |
 | `data/dashboard_data.json` | The aggregated numbers behind the dashboard. |
 | `build-dashboard.mjs` | Pulls live data from GoHighLevel and regenerates everything. |
 | `render.mjs` | Turns aggregated data into the HTML (shared by the build script). |
+| `railway.json` | Railway build/deploy config. |
 
 ## Notes
 

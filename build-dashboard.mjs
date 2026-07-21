@@ -30,11 +30,6 @@ const APPT_FIELD_ID = process.env.GHL_APPT_FIELD_ID || 'swdRjiAcFZNMfXztLD0g';  
 const VA_CAL_ID     = process.env.GHL_VA_CAL_ID     || 'iDBM1sRSqiZBWhblcGPD';   // "VA Calendar"
 const T65_CAL_ID    = process.env.GHL_T65_CAL_ID    || 'jDfKPflpQai5OB0v7m0C';   // "Turning 65 Medicare Call"
 
-if (!TOKEN) {
-  console.error('ERROR: set GHL_API_TOKEN (a GoHighLevel Private Integration token). See header of this file.');
-  process.exit(1);
-}
-
 const headers = { Authorization: `Bearer ${TOKEN}`, Version: VERSION, Accept: 'application/json' };
 
 async function api(path, opts = {}) {
@@ -129,7 +124,10 @@ function aggregate(contacts, va, t65) {
   };
 }
 
-async function main() {
+export async function build() {
+  if (!TOKEN) {
+    throw new Error('GHL_API_TOKEN is not set (a GoHighLevel Private Integration token). See README / header of this file.');
+  }
   const start = new Date((process.env.START || '2025-01-01') + 'T00:00:00Z').getTime();
   const end = new Date((process.env.END || '2026-12-31') + 'T23:59:59Z').getTime();
   console.error('Fetching contacts…');
@@ -146,6 +144,10 @@ async function main() {
   fs.writeFileSync('./dashboard.html', renderDoc(data));
   console.error(`\nDone. ${data.totals.leads} leads · ${data.totals.appts} appts booked · ${data.totals.sales} sales`);
   console.error('Wrote dashboard.html and data/dashboard_data.json');
+  return data;
 }
 
-main().catch(err => { console.error('\n' + err.message); process.exit(1); });
+// Run as a CLI only when invoked directly (not when imported by the server).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  build().catch(err => { console.error('\n' + err.message); process.exit(1); });
+}
