@@ -97,7 +97,8 @@ async function fetchSaleContacts() {
 }
 
 async function fetchEvents(calendarId, startMs, endMs) {
-  const data = await api(`/calendars/events?calendarId=${calendarId}&startTime=${startMs}&endTime=${endMs}`);
+  // locationId is required on this endpoint (the MCP connector used to inject it).
+  const data = await api(`/calendars/events?locationId=${LOCATION}&calendarId=${calendarId}&startTime=${startMs}&endTime=${endMs}`);
   return data.events || [];
 }
 
