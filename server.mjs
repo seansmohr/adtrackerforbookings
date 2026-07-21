@@ -30,7 +30,7 @@ async function refresh(reason) {
     const { build } = await import('./build-dashboard.mjs');
     const data = await build();
     lastRefresh = new Date().toISOString();
-    console.log(`[refresh:${reason}] ok — ${data.totals.leads} leads, ${data.totals.appts} appts, ${data.totals.sales} sales`);
+    console.log(`[refresh:${reason}] ok — ${data.contacts.length} ad leads, ${data.meta.total_sales} sales (${data.meta.attributed_sales} attributed)`);
     return { ok: true, generatedAt: data.generatedAt };
   } catch (err) {
     console.error(`[refresh:${reason}] failed — ${err.message}`);
