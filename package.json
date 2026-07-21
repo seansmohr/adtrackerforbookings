@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "build": "node build-dashboard.mjs",
-    "serve": "node server.mjs"
+    "refresh": "node build-dashboard.mjs"
   },
   "engines": {
     "node": ">=18"
