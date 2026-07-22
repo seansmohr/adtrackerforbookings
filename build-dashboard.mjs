@@ -63,6 +63,8 @@ const day = iso => (iso || '').slice(0, 10) || null;
 
 // Normalize a person's name for matching (lowercase, strip punctuation, collapse spaces).
 const normName = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+// Last 10 digits of a phone, so +12142829434 and 12142829434 both -> 2142829434.
+const phone10 = s => { const d = String(s == null ? '' : s).replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : ''; };
 const parseMoney = s => { const n = parseFloat(String(s == null ? '' : s).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
 
 // Minimal RFC-4180-ish CSV parser (handles quoted fields, embedded commas/newlines).
@@ -96,6 +98,7 @@ async function fetchAdContacts() {
       if (ad != null && ad !== '') out.set(c.id, {
         ad, appt: cf[APPT_FIELD_ID] || null, added: day(c.dateAdded),
         name: normName(c.contactName || `${c.firstName || ''} ${c.lastName || ''}`),
+        phone: phone10(c.phone),
       });
     }
     process.stderr.write(`\rad contacts: ${out.size}/${data.total || '?'}   `);
@@ -121,44 +124,50 @@ async function fetchSaleContacts() {
   return out;
 }
 
-// Read the Master Production Sheet as a published CSV and build a
-// normalized-name -> { proj, conf } revenue map. Sums multiple policies per client.
+// Read the Master Production Sheet as a published CSV and build revenue maps keyed by
+// phone (last 10 digits) and by normalized client name. Sums multiple policies per client.
 // Set PRODUCTION_CSV_URL to the "Publish to web -> CSV" URL of the tab that exposes
-// the client name + projected + confirmed revenue columns. Column headers are matched
-// case-insensitively; override with PRODUCTION_CLIENT_COL / PRODUCTION_PROJECTED_COL /
-// PRODUCTION_CONFIRMED_COL if your headers differ.
+// client name + phone + projected + confirmed revenue. Headers are matched
+// case-insensitively; override with PRODUCTION_CLIENT_COL / PRODUCTION_PHONE_COL /
+// PRODUCTION_PROJECTED_COL / PRODUCTION_CONFIRMED_COL if your headers differ.
 async function fetchProduction() {
   const url = process.env.PRODUCTION_CSV_URL;
-  if (!url) return { map: new Map(), clients: 0, connected: false };
+  const empty = { byPhone: new Map(), byName: new Map(), clients: 0, connected: false };
+  if (!url) return empty;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`production sheet ${res.status} ${res.statusText}`);
   const rows = parseCSV(await res.text());
   const wantClient = (process.env.PRODUCTION_CLIENT_COL || 'client').toLowerCase();
+  const wantPhone = (process.env.PRODUCTION_PHONE_COL || 'phone number').toLowerCase();
   const wantProj = (process.env.PRODUCTION_PROJECTED_COL || 'projected rev').toLowerCase();
   const wantConf = (process.env.PRODUCTION_CONFIRMED_COL || 'revenue').toLowerCase();
-  // Find the header row (the one that contains the client column).
+  // Find the header row (the one that contains the client column + a revenue column).
   let hi = -1, cols = null;
   for (let i = 0; i < rows.length; i++) {
     const lc = rows[i].map(x => (x || '').trim().toLowerCase());
-    if (lc.includes(wantClient) && (lc.includes(wantProj) || lc.includes(wantConf))) {
-      hi = i; cols = lc; break;
-    }
+    if (lc.includes(wantClient) && (lc.includes(wantProj) || lc.includes(wantConf))) { hi = i; cols = lc; break; }
   }
   if (hi < 0) throw new Error('production sheet: could not find header row (client/revenue columns)');
   const ci = cols.indexOf(wantClient);
+  const phi = cols.indexOf(wantPhone);
   const pi = cols.indexOf(wantProj);
   const fi = cols.indexOf(wantConf);
-  const map = new Map();
+  const byPhone = new Map(), byName = new Map();
+  const add = (map, key, proj, conf) => {
+    if (!key) return;
+    const cur = map.get(key) || { proj: 0, conf: 0 };
+    cur.proj += proj; cur.conf += conf; map.set(key, cur);
+  };
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i]; const name = normName(r[ci]);
     if (!name || name === wantClient) continue;
     const proj = pi >= 0 ? parseMoney(r[pi]) : 0;
     const conf = fi >= 0 ? parseMoney(r[fi]) : 0;
     if (!proj && !conf) continue;
-    const cur = map.get(name) || { proj: 0, conf: 0 };
-    cur.proj += proj; cur.conf += conf; map.set(name, cur);
+    add(byName, name, proj, conf);
+    if (phi >= 0) add(byPhone, phone10(r[phi]), proj, conf);
   }
-  return { map, clients: map.size, connected: true };
+  return { byPhone, byName, clients: Math.max(byPhone.size, byName.size), connected: true };
 }
 
 async function fetchEvents(calendarId, startMs, endMs) {
@@ -187,12 +196,14 @@ function build2(adContacts, saleContacts, va, t65, production) {
   const vaB = bookingSets(va), t65B = bookingSets(t65);
   const ads = [], adIdx = new Map();
   const contacts = [];
-  let attributedSales = 0, revProj = 0, revConf = 0, revMatched = 0;
+  let attributedSales = 0, revProj = 0, revConf = 0, revMatched = 0, matchPhone = 0, matchName = 0;
   for (const [cid, info] of adContacts) {
     const sale = info.appt && info.appt.toLowerCase().includes('sale') ? 1 : 0;
     if (sale) attributedSales++;
     if (!adIdx.has(info.ad)) { adIdx.set(info.ad, ads.length); ads.push(info.ad); }
-    const rev = production.map.get(info.name);
+    // Match to the production sheet by phone first (most reliable), then by name.
+    let rev = info.phone ? production.byPhone.get(info.phone) : null;
+    if (rev) matchPhone++; else { rev = info.name ? production.byName.get(info.name) : null; if (rev) matchName++; }
     const pr = rev ? Math.round(rev.proj * 100) / 100 : 0;
     const cr = rev ? Math.round(rev.conf * 100) / 100 : 0;
     if (rev) { revMatched++; revProj += pr; revConf += cr; }
@@ -218,9 +229,9 @@ function build2(adContacts, saleContacts, va, t65, production) {
       attributed_sales: attributedSales, unattributed_sales: unattributedSales.length,
       revenue_projected: Math.round(revProj * 100) / 100,
       revenue_confirmed: Math.round(revConf * 100) / 100,
-      revenue_clients_matched: revMatched, production_clients: production.clients,
-      revenue_connected: production.connected,
-      revenue_source: 'Master Production Sheet (Client name -> Projected + Confirmed revenue)',
+      revenue_clients_matched: revMatched, revenue_match_phone: matchPhone, revenue_match_name: matchName,
+      production_clients: production.clients, revenue_connected: production.connected,
+      revenue_source: 'Master Production Sheet (phone-first, name fallback -> Projected + Confirmed revenue)',
     },
     activeAds: readConfig().activeAds || [],
     ads, contacts, unattributedSales,

@@ -149,16 +149,17 @@ snapshot — deploys never fail for a missing token.
 ## Revenue (Master Production Sheet)
 
 The dashboard can attribute **projected and confirmed revenue** to each ad by joining
-GHL leads to the production sheet **on client full name**. A sold lead's revenue is the
-sum of their policy rows (a client with two policies gets both counted).
+GHL leads to the production sheet. It matches **by phone number first** (last 10 digits,
+so `+1…` vs `1…` vs `(…)` all match) and falls back to **client full name**. A sold
+lead's revenue is the sum of their policy rows (a client with two policies gets both).
 
 - **Confirmed Revenue** = sum of the sheet's confirmed-revenue column (col **I**, "Revenue").
 - **Projected Revenue** = sum of the projected-revenue column (col **H**, "Projected Rev").
 
 Revenue shows up as two KPI tiles, `Conf $` / `Proj $` columns in the table, a
 `Confirmed $` and `$ / lead` option on the "which ads to scale" chart, and a "Most
-revenue" callout. Names are matched case-insensitively with punctuation stripped;
-matching is **name-order sensitive** (expects "First Last", same as GHL).
+revenue" callout. Phone matching is exact on the last 10 digits; the name fallback is
+case-insensitive with punctuation stripped and is **name-order sensitive** ("First Last").
 
 ### Connecting it (published CSV)
 
@@ -169,16 +170,17 @@ The live refresh reads the sheet as a published CSV — no Google auth needed:
 3. Add it in Railway as `PRODUCTION_CSV_URL`. (Locally: prefix the build command with it.)
 
 The build finds the header row automatically and looks for columns named `Client`,
-`Projected Rev`, and `Revenue`. If your headers differ, override with
-`PRODUCTION_CLIENT_COL`, `PRODUCTION_PROJECTED_COL`, `PRODUCTION_CONFIRMED_COL`.
+`Phone Number`, `Projected Rev`, and `Revenue`. If your headers differ, override with
+`PRODUCTION_CLIENT_COL`, `PRODUCTION_PHONE_COL`, `PRODUCTION_PROJECTED_COL`,
+`PRODUCTION_CONFIRMED_COL`.
 
 > ⚠️ **Privacy — do not publish the raw Production tab.** It contains client emails and
 > **Medicare numbers**; "Publish to web" makes that tab public to anyone with the URL.
-> Instead add a **helper tab** (e.g. `Ad Revenue Feed`) with just three columns pulled
-> from Production — `Client`, `Projected Rev`, `Revenue` — for example in A2:
-> `=FILTER(Production!C2:C, Production!C2:C<>"")` and the matching H/I columns, then
-> publish **that** tab. The dashboard only needs those three fields, and its output
-> never stores client names — only per-ad revenue totals.
+> Instead add a **helper tab** (e.g. `Ad Revenue Feed`) with just the four columns the
+> join needs — `Client`, `Phone Number`, `Projected Rev`, `Revenue` — pulled from
+> Production (e.g. an `=FILTER(...)` or `={Production!C2:C, Production!S2:S, …}`), then
+> publish **that** tab. The dashboard only needs those fields, and its saved output
+> never stores names or phones — only per-ad revenue totals.
 
 ## Files
 
