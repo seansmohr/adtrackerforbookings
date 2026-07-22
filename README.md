@@ -11,6 +11,8 @@ Data comes from GoHighLevel:
 - **Turning 65 appointments** — leads that booked on the **Turning 65 Medicare Call** calendar.
 - **Sales** — leads whose **Appointment Status** field contains the word *"Sale"*
   (e.g. `Sale (MA)`, `Sale (MedSupp)`, …).
+- **Revenue** — projected & confirmed revenue joined from the **Master Production Sheet**
+  on client name, attributed back to the ad (see **Revenue** below).
 
 Open **`dashboard.html`** in any browser. It is a single self-contained file — no
 server, no build step needed just to view it. Deployed, it runs as a small web
@@ -138,10 +140,45 @@ add these **service Variables** in Railway:
 | `GHL_API_TOKEN` | your GoHighLevel Private Integration token (see below) |
 | `GHL_LOCATION_ID` | `dTtT96ODx29mbQcdOp0v` (already the default) |
 | `REFRESH_HOURS` | optional, default `6` — auto-refresh interval; `0` disables |
+| `PRODUCTION_CSV_URL` | optional — published-CSV URL of the production sheet, to attribute revenue (see **Revenue** below) |
 
 With a token set, the service pulls fresh data on boot and every `REFRESH_HOURS`,
 and `POST /refresh` forces an immediate rebuild. Without one, it just serves the
 snapshot — deploys never fail for a missing token.
+
+## Revenue (Master Production Sheet)
+
+The dashboard can attribute **projected and confirmed revenue** to each ad by joining
+GHL leads to the production sheet **on client full name**. A sold lead's revenue is the
+sum of their policy rows (a client with two policies gets both counted).
+
+- **Confirmed Revenue** = sum of the sheet's confirmed-revenue column (col **I**, "Revenue").
+- **Projected Revenue** = sum of the projected-revenue column (col **H**, "Projected Rev").
+
+Revenue shows up as two KPI tiles, `Conf $` / `Proj $` columns in the table, a
+`Confirmed $` and `$ / lead` option on the "which ads to scale" chart, and a "Most
+revenue" callout. Names are matched case-insensitively with punctuation stripped;
+matching is **name-order sensitive** (expects "First Last", same as GHL).
+
+### Connecting it (published CSV)
+
+The live refresh reads the sheet as a published CSV — no Google auth needed:
+
+1. In the sheet, **File → Share → Publish to web**.
+2. Choose the tab with the revenue rows, format **CSV**, **Publish**, copy the URL.
+3. Add it in Railway as `PRODUCTION_CSV_URL`. (Locally: prefix the build command with it.)
+
+The build finds the header row automatically and looks for columns named `Client`,
+`Projected Rev`, and `Revenue`. If your headers differ, override with
+`PRODUCTION_CLIENT_COL`, `PRODUCTION_PROJECTED_COL`, `PRODUCTION_CONFIRMED_COL`.
+
+> ⚠️ **Privacy — do not publish the raw Production tab.** It contains client emails and
+> **Medicare numbers**; "Publish to web" makes that tab public to anyone with the URL.
+> Instead add a **helper tab** (e.g. `Ad Revenue Feed`) with just three columns pulled
+> from Production — `Client`, `Projected Rev`, `Revenue` — for example in A2:
+> `=FILTER(Production!C2:C, Production!C2:C<>"")` and the matching H/I columns, then
+> publish **that** tab. The dashboard only needs those three fields, and its output
+> never stores client names — only per-ad revenue totals.
 
 ## Files
 
