@@ -136,31 +136,47 @@ async function fetchProduction() {
   if (!url) return empty;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`production sheet ${res.status} ${res.statusText}`);
-  const rows = parseCSV(await res.text());
-  const wantClient = (process.env.PRODUCTION_CLIENT_COL || 'client').toLowerCase();
-  const wantPhone = (process.env.PRODUCTION_PHONE_COL || 'phone number').toLowerCase();
-  const wantProj = (process.env.PRODUCTION_PROJECTED_COL || 'projected rev').toLowerCase();
-  const wantConf = (process.env.PRODUCTION_CONFIRMED_COL || 'revenue').toLowerCase();
-  // Find the header row (the one that contains the client column + a revenue column).
-  let hi = -1, cols = null;
-  for (let i = 0; i < rows.length; i++) {
-    const lc = rows[i].map(x => (x || '').trim().toLowerCase());
-    if (lc.includes(wantClient) && (lc.includes(wantProj) || lc.includes(wantConf))) { hi = i; cols = lc; break; }
+  const text = await res.text();
+  if (/^\s*</.test(text)) {
+    throw new Error('production sheet URL returned HTML, not CSV. In Google Sheets use File → Share → '
+      + 'Publish to web → pick the tab → format CSV, and use that link (it ends in output=csv).');
   }
-  if (hi < 0) throw new Error('production sheet: could not find header row (client/revenue columns)');
-  const ci = cols.indexOf(wantClient);
-  const phi = cols.indexOf(wantPhone);
-  const pi = cols.indexOf(wantProj);
-  const fi = cols.indexOf(wantConf);
+  const rows = parseCSV(text);
+
+  // Column finder: optional explicit override (substring match), else fuzzy by keyword.
+  const find = (cols, envName, any, not = []) => {
+    const override = (process.env[envName] || '').toLowerCase().trim();
+    if (override) { const i = cols.findIndex(c => c.includes(override)); if (i >= 0) return i; }
+    return cols.findIndex(c => any.some(s => c.includes(s)) && !not.some(s => c.includes(s)));
+  };
+  // Find the header row: the first row that has a client/name column AND a revenue column.
+  let hi = -1, cols = null, ci = -1, pi = -1, fi = -1, phi = -1;
+  for (let i = 0; i < Math.min(rows.length, 60); i++) {
+    const lc = rows[i].map(x => (x || '').trim().toLowerCase());
+    const c = find(lc, 'PRODUCTION_CLIENT_COL', ['client', 'name'], ['agent', 'carrier', 'user', 'file']);
+    const p = find(lc, 'PRODUCTION_PROJECTED_COL', ['projected'], ['commission']);
+    const f = find(lc, 'PRODUCTION_CONFIRMED_COL', ['revenue', 'confirmed'], ['projected', 'commission']);
+    if (c >= 0 && (p >= 0 || f >= 0)) {
+      hi = i; cols = lc; ci = c; pi = p; fi = f;
+      phi = find(lc, 'PRODUCTION_PHONE_COL', ['phone', 'mobile', 'cell']);
+      break;
+    }
+  }
+  if (hi < 0) {
+    const seen = rows.slice(0, 5).map(r => r.join(' | ')).join('  //  ').slice(0, 300);
+    throw new Error('production sheet: could not find a header row with a client column and a projected/confirmed '
+      + 'revenue column. Make sure the published tab is the one with those columns. First rows seen: ' + seen);
+  }
   const byPhone = new Map(), byName = new Map();
   const add = (map, key, proj, conf) => {
     if (!key) return;
     const cur = map.get(key) || { proj: 0, conf: 0 };
     cur.proj += proj; cur.conf += conf; map.set(key, cur);
   };
+  const clientHdr = cols[ci];
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i]; const name = normName(r[ci]);
-    if (!name || name === wantClient) continue;
+    if (!name || name === clientHdr) continue;
     const proj = pi >= 0 ? parseMoney(r[pi]) : 0;
     const conf = fi >= 0 ? parseMoney(r[fi]) : 0;
     if (!proj && !conf) continue;
