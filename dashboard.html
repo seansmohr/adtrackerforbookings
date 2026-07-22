@@ -137,7 +137,7 @@
     <div class="adx-watch" id="adx-watch"></div>
     <div class="adx-tablewrap">
       <table class="adx-t" id="adx-activetable"><thead><tr>
-        <th>Active ad</th><th>Leads</th><th>VA</th><th>T65</th><th>Appts</th><th>Appt %</th><th>Sales</th><th>Conf $</th>
+        <th>Active ad</th><th>Leads</th><th>VA</th><th>T65</th><th>Appts</th><th>Appt %</th><th>Sales</th><th>Conf $</th><th>Proj $</th>
       </tr></thead><tbody id="adx-activebody"></tbody></table>
     </div>
     <p class="adx-empty" id="adx-active-empty" hidden>No active ads yet — add one above.</p>
@@ -376,13 +376,14 @@
     var body=document.getElementById('adx-activebody');
     var empty=document.getElementById('adx-active-empty');
     empty.hidden = watch.length>0;
-    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,va:0,t:0,appts:0,appt_rate:0,sales:0,rev_c:0,_none:true};});
-    rows.sort(function(a,b){return b.rev_c-a.rev_c||b.sales-a.sales||b.leads-a.leads;});
+    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,va:0,t:0,appts:0,appt_rate:0,sales:0,rev_c:0,rev_p:0,_none:true};});
+    rows.sort(function(a,b){return b.rev_c-a.rev_c||b.rev_p-a.rev_p||b.sales-a.sales||b.leads-a.leads;});
     body.innerHTML=rows.map(function(r){
       return '<tr><td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+'</span></td>'
         +'<td class="num">'+(r._none?'—':nf(r.leads))+'</td><td class="num">'+(r._none?'—':r.va)+'</td><td class="num">'+(r._none?'—':r.t)+'</td>'
         +'<td class="num">'+(r._none?'—':r.appts)+'</td><td class="num">'+(r._none?'—':r.appt_rate+'%')+'</td>'
-        +'<td class="num">'+(r._none?'—':r.sales)+'</td><td class="num">'+(r._none?'—':(r.rev_c?money(r.rev_c):'$0'))+'</td></tr>';
+        +'<td class="num">'+(r._none?'—':r.sales)+'</td><td class="num">'+(r._none?'—':(r.rev_c?money(r.rev_c):'$0'))+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.rev_p?money(r.rev_p):'$0'))+'</td></tr>';
     }).join('');
   }
 
