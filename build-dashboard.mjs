@@ -66,6 +66,14 @@ const normName = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace
 // Last 10 digits of a phone, so +12142829434 and 12142829434 both -> 2142829434.
 const phone10 = s => { const d = String(s == null ? '' : s).replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : ''; };
 const parseMoney = s => { const n = parseFloat(String(s == null ? '' : s).replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
+// Parse a sale date (App Date) into YYYY-MM-DD. Accepts M/D/YYYY or YYYY-MM-DD.
+const parseDate = s => {
+  s = String(s == null ? '' : s).trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? m[0] : null;
+};
 
 // Minimal RFC-4180-ish CSV parser (handles quoted fields, embedded commas/newlines).
 function parseCSV(text) {
@@ -150,7 +158,7 @@ async function fetchProduction() {
     return cols.findIndex(c => any.some(s => c.includes(s)) && !not.some(s => c.includes(s)));
   };
   // Find the header row: the first row that has a client/name column AND a revenue column.
-  let hi = -1, cols = null, ci = -1, pi = -1, fi = -1, phi = -1;
+  let hi = -1, cols = null, ci = -1, pi = -1, fi = -1, phi = -1, di = -1;
   for (let i = 0; i < Math.min(rows.length, 60); i++) {
     const lc = rows[i].map(x => (x || '').trim().toLowerCase());
     const c = find(lc, 'PRODUCTION_CLIENT_COL', ['client', 'name'], ['agent', 'carrier', 'user', 'file']);
@@ -159,6 +167,7 @@ async function fetchProduction() {
     if (c >= 0 && (p >= 0 || f >= 0)) {
       hi = i; cols = lc; ci = c; pi = p; fi = f;
       phi = find(lc, 'PRODUCTION_PHONE_COL', ['phone', 'mobile', 'cell']);
+      di = find(lc, 'PRODUCTION_DATE_COL', ['app date', 'sale date', 'sold date', 'date'], ['effective', 'birth', 'dob', 'updated', 'added', 'lead']);
       break;
     }
   }
@@ -168,10 +177,10 @@ async function fetchProduction() {
       + 'revenue column. Make sure the published tab is the one with those columns. First rows seen: ' + seen);
   }
   const byPhone = new Map(), byName = new Map();
-  const add = (map, key, proj, conf) => {
+  const add = (map, key, proj, conf, sd) => {
     if (!key) return;
-    const cur = map.get(key) || { proj: 0, conf: 0 };
-    cur.proj += proj; cur.conf += conf; map.set(key, cur);
+    const cur = map.get(key) || { proj: 0, conf: 0, sd: null };
+    cur.proj += proj; cur.conf += conf; if (sd) cur.sd = sd; map.set(key, cur);
   };
   const clientHdr = cols[ci];
   for (let i = hi + 1; i < rows.length; i++) {
@@ -180,8 +189,9 @@ async function fetchProduction() {
     const proj = pi >= 0 ? parseMoney(r[pi]) : 0;
     const conf = fi >= 0 ? parseMoney(r[fi]) : 0;
     if (!proj && !conf) continue;
-    add(byName, name, proj, conf);
-    if (phi >= 0) add(byPhone, phone10(r[phi]), proj, conf);
+    const sd = di >= 0 ? parseDate(r[di]) : null;
+    add(byName, name, proj, conf, sd);
+    if (phi >= 0) add(byPhone, phone10(r[phi]), proj, conf, sd);
   }
   return { byPhone, byName, clients: Math.max(byPhone.size, byName.size), connected: true };
 }
@@ -223,12 +233,14 @@ function build2(adContacts, saleContacts, va, t65, production) {
     const pr = rev ? Math.round(rev.proj * 100) / 100 : 0;
     const cr = rev ? Math.round(rev.conf * 100) / 100 : 0;
     if (rev) { revMatched++; revProj += pr; revConf += cr; }
-    contacts.push({
+    const rec = {
       a: adIdx.get(info.ad), d: info.added,
       va: vaB.booked.has(cid) ? 1 : 0, vs: vaB.showed.has(cid) ? 1 : 0,
       t: t65B.booked.has(cid) ? 1 : 0, ts: t65B.showed.has(cid) ? 1 : 0, s: sale,
       pr, cr,
-    });
+    };
+    if (rev && rev.sd) rec.sd = rev.sd; // sale date (App Date) — revenue & sales filter by this
+    contacts.push(rec);
   }
   // sales without an Ad Creative (organic / referral) — for total reconciliation
   const unattributedSales = saleContacts
@@ -247,7 +259,8 @@ function build2(adContacts, saleContacts, va, t65, production) {
       revenue_confirmed: Math.round(revConf * 100) / 100,
       revenue_clients_matched: revMatched, revenue_match_phone: matchPhone, revenue_match_name: matchName,
       production_clients: production.clients, revenue_connected: production.connected,
-      revenue_source: 'Master Production Sheet (phone-first, name fallback -> Projected + Confirmed revenue)',
+      revenue_date_basis: 'sale (App Date)',
+      revenue_source: 'Ad Tracking For Rev tab (phone-first, name fallback); revenue & sales filtered by App Date',
     },
     activeAds: readConfig().activeAds || [],
     ads, contacts, unattributedSales,

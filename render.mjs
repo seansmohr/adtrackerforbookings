@@ -44,6 +44,8 @@ export function renderBody(data) {
   .adx-daterow label{font-size:0.8rem;color:var(--text-secondary);display:inline-flex;align-items:center;gap:6px;}
   .adx-daterow input[type=date]{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;font:inherit;font-size:0.8rem;color:var(--text-primary);color-scheme:light dark;}
   .adx-daterow .rng{margin-left:auto;font-size:0.8rem;color:var(--text-muted);}
+  .adx-daterow .adx-basis{flex-basis:100%;font-size:0.76rem;color:var(--text-muted);}
+  .adx-daterow .adx-basis b{color:var(--text-secondary);}
   .adx-daterow #adx-refresh[disabled]{opacity:0.6;cursor:default;}
   .adx-refresh-msg{margin:-12px 0 20px;font-size:0.82rem;padding:9px 14px;border-radius:10px;border:1px solid var(--border);background:var(--surface-2);color:var(--text-secondary);}
   .adx-refresh-msg.err{border-color:var(--series-test);color:var(--text-primary);}
@@ -125,6 +127,7 @@ export function renderBody(data) {
     <label>To <input type="date" id="adx-to"></label>
     <span class="rng" id="adx-rnglabel"></span>
     <button class="adx-linkbtn" id="adx-refresh" title="Pull fresh data from GoHighLevel and rebuild (works on the deployed app when a GHL token is configured)">↻ Refresh from GHL</button>
+    <span class="adx-basis">Sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date</span>
   </div>
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
 
@@ -274,18 +277,21 @@ export function renderBody(data) {
   function aggregate(){
     var m={}; // adName -> row
     for(var i=0;i<ADS.length;i++){ m[ADS[i]]={ad:ADS[i],group:groupOf(ADS[i]),leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0}; }
-    for(var j=0;j<C.length;j++){ var r=C[j]; if(!inRange(r.d))continue; var a=m[ADS[r.a]];
-      a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; if(r.s)a.sales++;
-      a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
+    for(var j=0;j<C.length;j++){ var r=C[j]; var a=m[ADS[r.a]];
+      // Leads & appointments: counted by lead arrival date.
+      if(inRange(r.d)){ a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; }
+      // Sales & revenue: counted by SALE date (App Date), falling back to lead date if none.
+      if(inRange(r.sd||r.d)){ if(r.s)a.sales++; a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
+    }
     var rows=[];
-    for(var k in m){ var a=m[k]; if(a.leads===0)continue;
+    for(var k in m){ var a=m[k]; if(a.leads===0 && a.sales===0 && a.rev_p===0 && a.rev_c===0 && a.appts===0)continue;
       a.showed=a.vs+a.ts;
       a.appt_rate=a.leads?+(100*a.appts/a.leads).toFixed(1):0;
       a.sale_rate=a.leads?+(100*a.sales/a.leads).toFixed(1):0;
       a.close_rate=a.appts?+(100*a.sales/a.appts).toFixed(1):0;
       a.rev_lead=a.leads?a.rev_c/a.leads:0;
       rows.push(a); }
-    var unsale=0; for(var u=0;u<UNSALE.length;u++){ if(inRange(UNSALE[u].d)) unsale++; }
+    var unsale=0; for(var u=0;u<UNSALE.length;u++){ if(inRange(UNSALE[u].sd||UNSALE[u].d)) unsale++; }
     return {rows:rows, unattributedSales:unsale};
   }
 
