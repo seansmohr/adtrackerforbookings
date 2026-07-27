@@ -183,6 +183,7 @@ export function renderBody(data) {
           <th data-k="showed">Showed</th>
           <th data-k="spend">Spend</th>
           <th data-k="cpl">Cost/Lead</th>
+          <th data-k="cpa">Cost/Appt</th>
           <th data-k="sales">Sales</th>
           <th data-k="cps">Cost/Sale</th>
           <th data-k="rev_c">Conf $</th>
@@ -326,7 +327,7 @@ export function renderBody(data) {
   searchEl.oninput=function(){search=searchEl.value.toLowerCase();drawTable(cur);};
   document.getElementById('adx-hidezero').onchange=function(e){hideZero=e.target.checked;drawTable(cur);};
   document.querySelectorAll('#adx-table thead th').forEach(function(th){
-    th.onclick=function(){var k=th.dataset.k; if(k===sortK){sortDir*=-1;}else{sortK=k;sortDir=(k==='ad')?1:-1;} drawTable(cur);};
+    th.onclick=function(){var k=th.dataset.k; var asc={ad:1,cpl:1,cpa:1,cps:1}; if(k===sortK){sortDir*=-1;}else{sortK=k;sortDir=asc[k]?1:-1;} drawTable(cur);};
   });
 
   var cur=null;
@@ -441,7 +442,10 @@ export function renderBody(data) {
 
   function drawTable(cur){
     var list=cur.rows.filter(function(r){return (!search||r.ad.toLowerCase().indexOf(search)>=0)&&(!hideZero||r.appts>0);});
-    list.sort(function(a,b){var x=a[sortK],y=b[sortK];if(typeof x==='string')return x.localeCompare(y)*sortDir;return (x-y)*sortDir;});
+    list.sort(function(a,b){var x=a[sortK],y=b[sortK];
+      if(typeof x==='string'||typeof y==='string')return String(x).localeCompare(String(y))*sortDir;
+      if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1;  // nulls always last
+      return (x-y)*sortDir;});
     var maxLeads=Math.max.apply(null,[1].concat(cur.rows.map(function(r){return r.leads;})));
     document.querySelectorAll('#adx-table thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===sortK);});
     var html=list.map(function(r){
@@ -453,6 +457,7 @@ export function renderBody(data) {
         +'<td class="num">'+nf(r.leads)+'</td><td class="num">'+r.va+'</td><td class="num">'+r.t+'</td>'
         +'<td class="num">'+r.appts+'</td><td class="num">'+r.appt_rate+'%</td><td class="num">'+r.showed+'</td>'
         +'<td class="num">'+(r.spend?money(r.spend):'—')+'</td><td class="num">'+(r.cpl==null?'—':money(r.cpl))+'</td>'
+        +'<td class="num">'+(r.cpa==null?'—':money(r.cpa))+'</td>'
         +'<td class="num">'+r.sales+'</td><td class="num">'+(r.cps==null?'—':money(r.cps))+'</td>'
         +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td>'
         +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td></tr>';
@@ -460,7 +465,7 @@ export function renderBody(data) {
     if(cur.unattributedSales>0 && !search && !hideZero){
       html+='<tr class="unattr"><td>(No Ad Creative — organic / referral)</td>'
         +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
-        +'<td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
+        +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
     }
     document.getElementById('adx-tbody').innerHTML=html;
     document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
