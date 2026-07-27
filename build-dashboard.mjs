@@ -218,6 +218,58 @@ function readConfig() {
   catch { return {}; }
 }
 
+// Meta ad spend, daily, by ad name. If META_ACCESS_TOKEN + META_AD_ACCOUNT_ID are
+// set, pull live from the Graph API; otherwise use the committed data/spend_daily.json.
+async function fetchSpendFromMeta(token, acct) {
+  const base = `https://graph.facebook.com/v21.0/act_${acct}/insights`;
+  let url = `${base}?level=ad&fields=ad_id,ad_name,spend&time_increment=1&date_preset=maximum&limit=500&access_token=${encodeURIComponent(token)}`;
+  const out = [];
+  for (let guard = 0; url && guard < 200; guard++) {
+    const res = await fetch(url);
+    if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta insights ${res.status} ${b.slice(0, 200)}`); }
+    const j = await res.json();
+    for (const r of j.data || []) {
+      const v = parseFloat(r.spend);
+      if (isFinite(v) && v > 0) out.push({ name: r.ad_name, id: r.ad_id, d: r.date_start, v: Math.round(v * 100) / 100 });
+    }
+    url = j.paging && j.paging.next ? j.paging.next : null;
+  }
+  return out;
+}
+
+async function loadSpend() {
+  const token = process.env.META_ACCESS_TOKEN, acct = process.env.META_AD_ACCOUNT_ID;
+  if (token && acct) {
+    try { const s = await fetchSpendFromMeta(token, acct); if (s.length) return s; }
+    catch (e) { console.error('Meta spend fetch failed (' + e.message + ') — using committed spend snapshot'); }
+  }
+  try { return JSON.parse(fs.readFileSync('./data/spend_daily.json', 'utf8')); }
+  catch { return []; }
+}
+
+// Fold daily spend into the data model: union its ad names into data.ads and emit
+// per-day spend records keyed to the ad index (matched case/space-insensitively).
+function mergeSpend(data, spendRecs) {
+  const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const nidx = new Map();
+  data.ads.forEach((a, i) => { if (!nidx.has(norm(a))) nidx.set(norm(a), i); });
+  const recs = [];
+  for (const s of spendRecs) {
+    const nk = norm(s.name);
+    let i = nidx.get(nk);
+    if (i == null) { i = data.ads.length; data.ads.push(s.name); nidx.set(nk, i); }
+    recs.push({ a: i, d: s.d, v: s.v });
+  }
+  data.spend = recs;
+  const dates = recs.map(r => r.d).filter(Boolean).sort();
+  data.meta.spend_total = Math.round(recs.reduce((s, r) => s + r.v, 0) * 100) / 100;
+  data.meta.spend_from = dates[0] || null;
+  data.meta.spend_to = dates[dates.length - 1] || null;
+  data.meta.spend_connected = recs.length > 0;
+  data.meta.spend_source = 'Meta Ads — daily spend by ad name';
+  return data;
+}
+
 function build2(adContacts, saleContacts, va, t65, production) {
   const vaB = bookingSets(va), t65B = bookingSets(t65);
   const ads = [], adIdx = new Map();
@@ -281,11 +333,14 @@ export async function build() {
   const t65 = await fetchEvents(T65_CAL_ID, start, end);
   console.error(process.env.PRODUCTION_CSV_URL ? 'Fetching production sheet (revenue)…' : 'PRODUCTION_CSV_URL not set — skipping revenue.');
   const production = await fetchProduction();
+  console.error((process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID) ? 'Fetching Meta ad spend…' : 'Using committed Meta spend snapshot (set META_ACCESS_TOKEN + META_AD_ACCOUNT_ID for live).');
+  const spend = await loadSpend();
 
-  const data = build2(adContacts, saleContacts, va, t65, production);
+  const data = mergeSpend(build2(adContacts, saleContacts, va, t65, production), spend);
   fs.mkdirSync('./data', { recursive: true });
   fs.writeFileSync('./data/dashboard_data.json', JSON.stringify(data));
   fs.writeFileSync('./dashboard.html', renderDoc(data));
+  console.error(`Spend: $${data.meta.spend_total} across ${data.spend.length} ad-days (${data.meta.spend_connected ? 'connected' : 'none'}).`);
   console.error(`\nDone. ${data.contacts.length} ad leads · ${data.meta.total_sales} sales `
     + `(${data.meta.attributed_sales} attributed) · revenue ${data.meta.revenue_connected
       ? `$${data.meta.revenue_confirmed} confirmed / $${data.meta.revenue_projected} projected (${data.meta.revenue_clients_matched} clients matched)`

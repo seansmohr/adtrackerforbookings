@@ -127,7 +127,7 @@ export function renderBody(data) {
     <label>To <input type="date" id="adx-to"></label>
     <span class="rng" id="adx-rnglabel"></span>
     <button class="adx-linkbtn" id="adx-refresh" title="Pull fresh data from GoHighLevel and rebuild (works on the deployed app when a GHL token is configured)">↻ Refresh from GHL</button>
-    <span class="adx-basis">Sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date</span>
+    <span class="adx-basis">Spend by <b>spend date</b> · sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date · ROAS = confirmed revenue ÷ spend</span>
   </div>
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
 
@@ -140,7 +140,7 @@ export function renderBody(data) {
     <div class="adx-watch" id="adx-watch"></div>
     <div class="adx-tablewrap">
       <table class="adx-t" id="adx-activetable"><thead><tr>
-        <th>Active ad</th><th>Leads</th><th>VA</th><th>T65</th><th>Appts</th><th>Appt %</th><th>Sales</th><th>Conf $</th><th>Proj $</th>
+        <th>Active ad</th><th>Leads</th><th>Appts</th><th>Spend</th><th>Sales</th><th>Conf $</th><th>Proj $</th><th>ROAS</th>
       </tr></thead><tbody id="adx-activebody"></tbody></table>
     </div>
     <p class="adx-empty" id="adx-active-empty" hidden>No active ads yet — add one above.</p>
@@ -181,11 +181,13 @@ export function renderBody(data) {
           <th data-k="appts">Appts</th>
           <th data-k="appt_rate">Appt %</th>
           <th data-k="showed">Showed</th>
+          <th data-k="spend">Spend</th>
+          <th data-k="cpl">Cost/Lead</th>
           <th data-k="sales">Sales</th>
-          <th data-k="sale_rate">Sale %</th>
-          <th data-k="close_rate">Close %</th>
+          <th data-k="cps">Cost/Sale</th>
           <th data-k="rev_c">Conf $</th>
           <th data-k="rev_p">Proj $</th>
+          <th data-k="roas">ROAS</th>
         </tr></thead>
         <tbody id="adx-tbody"></tbody>
       </table>
@@ -273,35 +275,45 @@ export function renderBody(data) {
   var leadsAllByAd = {};
   C.forEach(function(r){ var ad=ADS[r.a]; leadsAllByAd[ad]=(leadsAllByAd[ad]||0)+1; });
 
+  var SPEND = DATA.spend || [];
   // ---------- aggregation for current date range ----------
   function aggregate(){
     var m={}; // adName -> row
-    for(var i=0;i<ADS.length;i++){ m[ADS[i]]={ad:ADS[i],group:groupOf(ADS[i]),leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0}; }
+    for(var i=0;i<ADS.length;i++){ m[ADS[i]]={ad:ADS[i],group:groupOf(ADS[i]),leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0}; }
     for(var j=0;j<C.length;j++){ var r=C[j]; var a=m[ADS[r.a]];
       // Leads & appointments: counted by lead arrival date.
       if(inRange(r.d)){ a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; }
       // Sales & revenue: counted by SALE date (App Date), falling back to lead date if none.
       if(inRange(r.sd||r.d)){ if(r.s)a.sales++; a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
     }
+    // Ad spend: counted on the day it was spent.
+    for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
     var rows=[];
-    for(var k in m){ var a=m[k]; if(a.leads===0 && a.sales===0 && a.rev_p===0 && a.rev_c===0 && a.appts===0)continue;
+    for(var k in m){ var a=m[k];
+      if(a.leads===0 && a.sales===0 && a.rev_p===0 && a.rev_c===0 && a.appts===0 && a.spend===0)continue;
+      a.spend=Math.round(a.spend*100)/100;
       a.showed=a.vs+a.ts;
       a.appt_rate=a.leads?+(100*a.appts/a.leads).toFixed(1):0;
       a.sale_rate=a.leads?+(100*a.sales/a.leads).toFixed(1):0;
       a.close_rate=a.appts?+(100*a.sales/a.appts).toFixed(1):0;
       a.rev_lead=a.leads?a.rev_c/a.leads:0;
+      a.cpl=(a.spend>0&&a.leads>0)?a.spend/a.leads:null;   // cost per lead
+      a.cpa=(a.spend>0&&a.appts>0)?a.spend/a.appts:null;   // cost per appointment
+      a.cps=(a.spend>0&&a.sales>0)?a.spend/a.sales:null;   // cost per sale
+      a.roas=(a.spend>0)?a.rev_c/a.spend:null;             // confirmed revenue / spend
+      a.roas_p=(a.spend>0)?a.rev_p/a.spend:null;           // projected revenue / spend
       rows.push(a); }
     var unsale=0; for(var u=0;u<UNSALE.length;u++){ if(inRange(UNSALE[u].sd||UNSALE[u].d)) unsale++; }
     return {rows:rows, unattributedSales:unsale};
   }
 
   // ---------- render ----------
-  var metric='confrev', activeOnly=false, minLeads=20, search='', hideZero=false, sortK='leads', sortDir=-1;
+  var metric='roas', activeOnly=false, minLeads=20, search='', hideZero=false, sortK='spend', sortDir=-1;
   var gen = DATA.generatedAt?new Date(DATA.generatedAt):null;
 
   document.getElementById('adx-metric').innerHTML =
-    [['confrev','Confirmed $'],['revlead','$ / lead'],['appt','Appt rate'],['sales','Sales'],['salerate','Sale rate']].map(function(x){
-      return '<button class="f" data-m="'+x[0]+'" aria-pressed="'+(x[0]==='confrev')+'">'+x[1]+'</button>';}).join('');
+    [['roas','ROAS'],['spend','Spend'],['cpl','Cost / lead'],['confrev','Confirmed $'],['appt','Appt rate'],['sales','Sales']].map(function(x){
+      return '<button class="f" data-m="'+x[0]+'" aria-pressed="'+(x[0]==='roas')+'">'+x[1]+'</button>';}).join('');
   document.querySelectorAll('#adx-metric button').forEach(function(b){
     b.onclick=function(){ metric=b.dataset.m;
       document.querySelectorAll('#adx-metric button').forEach(function(x){x.setAttribute('aria-pressed',x.dataset.m===metric);});
@@ -320,8 +332,9 @@ export function renderBody(data) {
   var cur=null;
   function render(){
     cur=aggregate();
-    var tot={leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0};
-    cur.rows.forEach(function(r){tot.leads+=r.leads;tot.va+=r.va;tot.vs+=r.vs;tot.t+=r.t;tot.ts+=r.ts;tot.appts+=r.appts;tot.sales+=r.sales;tot.rev_p+=r.rev_p;tot.rev_c+=r.rev_c;});
+    var tot={leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0};
+    cur.rows.forEach(function(r){tot.leads+=r.leads;tot.va+=r.va;tot.vs+=r.vs;tot.t+=r.t;tot.ts+=r.ts;tot.appts+=r.appts;tot.sales+=r.sales;tot.rev_p+=r.rev_p;tot.rev_c+=r.rev_c;tot.spend+=r.spend;});
+    tot.spend=Math.round(tot.spend*100)/100;
     cur.tot=tot; cur.totalSales=tot.sales+cur.unattributedSales;
 
     // subtitle + range label
@@ -330,26 +343,27 @@ export function renderBody(data) {
     document.getElementById('adx-rnglabel').textContent = (!from&&!to)?'All time':((from||'…')+'  →  '+(to||'…'));
 
     // KPIs
-    var apptRate=tot.leads?100*tot.appts/tot.leads:0, saleRate=tot.leads?100*tot.sales/tot.leads:0, closeRate=tot.appts?100*tot.sales/tot.appts:0;
+    var apptRate=tot.leads?100*tot.appts/tot.leads:0;
+    var roas=tot.spend?tot.rev_c/tot.spend:null, roasP=tot.spend?tot.rev_p/tot.spend:null;
     var kpis=[
-      {lbl:'Leads', val:nf(tot.leads), note:'with an Ad Creative'},
-      {lbl:'Appointments', val:nf(tot.appts), note:apptRate.toFixed(1)+'% of leads'},
-      {lbl:'VA / T65 Appts', val:nf(tot.va)+' / '+nf(tot.t), note:(tot.vs+tot.ts)+' showed'},
+      {lbl:'Ad Spend', val:money(tot.spend), note:'Meta · '+(tot.leads?money(tot.spend/tot.leads)+'/lead':'—')},
+      {lbl:'Leads', val:nf(tot.leads), note:apptRate.toFixed(1)+'% booked'},
       {lbl:'Sales', val:nf(cur.totalSales), note:tot.sales+' from ads · '+cur.unattributedSales+' no ad creative'},
-      {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:'from ad-matched clients', rev:true},
-      {lbl:'Projected Revenue', val:money(tot.rev_p), note:'incl. pending', rev:true}
+      {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:money(tot.rev_p)+' projected', rev:true},
+      {lbl:'ROAS (confirmed)', val:roas==null?'—':roas.toFixed(2)+'x', note:roasP==null?'by sale date':roasP.toFixed(2)+'x projected', rev:roas!=null&&roas>=1},
+      {lbl:'Cost / Sale', val:tot.sales?money(tot.spend/tot.sales):'—', note:'spend ÷ sales'}
     ];
     document.getElementById('adx-kpis').innerHTML=kpis.map(function(k){
       return '<div class="adx-kpi'+(k.rev?' rev':'')+'"><div class="lbl">'+k.lbl+'</div><div class="val">'+k.val+'</div><div class="note">'+k.note+'</div></div>';}).join('');
 
     // callout
+    var bestRoas=cur.rows.filter(function(r){return r.spend>=50 && r.roas!=null;}).sort(function(a,b){return b.roas-a.roas;})[0];
     var byRev=cur.rows.slice().sort(function(a,b){return b.rev_c-a.rev_c;})[0];
-    var bySales=cur.rows.slice().sort(function(a,b){return b.sales-a.sales;})[0];
-    var perLead=cur.rows.filter(function(r){return r.leads>=30;}).sort(function(a,b){return b.rev_lead-a.rev_lead;})[0];
+    var bySpend=cur.rows.slice().sort(function(a,b){return b.spend-a.spend;})[0];
     var co='';
-    if(byRev&&byRev.rev_c>0) co+='<b>Most revenue:</b> “'+esc(byRev.ad)+'” — '+money(byRev.rev_c)+' confirmed ('+money(byRev.rev_p)+' projected) from '+nf(byRev.leads)+' leads. ';
-    if(perLead&&perLead.rev_lead>0) co+='<span class="pill"><b>Best revenue per lead at volume:</b> “'+esc(perLead.ad)+'” — '+money(perLead.rev_lead)+'/lead. </span>';
-    else if(bySales&&bySales.sales>0) co+='<span class="pill"><b>Most sales:</b> “'+esc(bySales.ad)+'” — '+bySales.sales+' ('+bySales.sale_rate+'%). </span>';
+    if(bestRoas) co+='<b>Best ROAS at spend:</b> “'+esc(bestRoas.ad)+'” — '+bestRoas.roas.toFixed(2)+'x ('+money(bestRoas.rev_c)+' on '+money(bestRoas.spend)+'). ';
+    if(byRev&&byRev.rev_c>0) co+='<span class="pill"><b>Most revenue:</b> “'+esc(byRev.ad)+'” — '+money(byRev.rev_c)+' confirmed. </span>';
+    if(bySpend&&bySpend.spend>0) co+='<span class="pill"><b>Highest spend:</b> “'+esc(bySpend.ad)+'” — '+money(bySpend.spend)+(bySpend.roas!=null?' ('+bySpend.roas.toFixed(2)+'x)':'')+'. </span>';
     document.getElementById('adx-callout').innerHTML=co||'No ad activity in this date range.';
 
     drawWatch(cur); drawActiveTable(cur); drawBars(cur); drawTable(cur);
@@ -382,25 +396,36 @@ export function renderBody(data) {
     var body=document.getElementById('adx-activebody');
     var empty=document.getElementById('adx-active-empty');
     empty.hidden = watch.length>0;
-    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,va:0,t:0,appts:0,appt_rate:0,sales:0,rev_c:0,rev_p:0,_none:true};});
-    rows.sort(function(a,b){return b.rev_c-a.rev_c||b.rev_p-a.rev_p||b.sales-a.sales||b.leads-a.leads;});
+    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,appts:0,spend:0,sales:0,rev_c:0,rev_p:0,roas:null,_none:true};});
+    rows.sort(function(a,b){return b.spend-a.spend||b.rev_c-a.rev_c||b.leads-a.leads;});
     body.innerHTML=rows.map(function(r){
       return '<tr><td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+'</span></td>'
-        +'<td class="num">'+(r._none?'—':nf(r.leads))+'</td><td class="num">'+(r._none?'—':r.va)+'</td><td class="num">'+(r._none?'—':r.t)+'</td>'
-        +'<td class="num">'+(r._none?'—':r.appts)+'</td><td class="num">'+(r._none?'—':r.appt_rate+'%')+'</td>'
-        +'<td class="num">'+(r._none?'—':r.sales)+'</td><td class="num">'+(r._none?'—':(r.rev_c?money(r.rev_c):'$0'))+'</td>'
-        +'<td class="num">'+(r._none?'—':(r.rev_p?money(r.rev_p):'$0'))+'</td></tr>';
+        +'<td class="num">'+(r._none?'—':nf(r.leads))+'</td><td class="num">'+(r._none?'—':r.appts)+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.spend?money(r.spend):'$0'))+'</td>'
+        +'<td class="num">'+(r._none?'—':r.sales)+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.rev_c?money(r.rev_c):'$0'))+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.rev_p?money(r.rev_p):'$0'))+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.roas==null?'—':r.roas.toFixed(2)+'x'))+'</td></tr>';
     }).join('');
   }
 
   function metricVal(r){
-    if(metric==='confrev')return r.rev_c; if(metric==='revlead')return r.rev_lead;
-    if(metric==='sales')return r.sales; if(metric==='salerate')return r.sale_rate; return r.appt_rate; }
+    if(metric==='roas')return r.roas==null?-1:r.roas;
+    if(metric==='spend')return r.spend;
+    if(metric==='cpl')return r.cpl==null?-1:r.cpl;
+    if(metric==='confrev')return r.rev_c;
+    if(metric==='sales')return r.sales; return r.appt_rate; }
   function metricFmt(r){
-    if(metric==='confrev'||metric==='revlead')return money(metricVal(r));
+    if(metric==='roas')return r.roas==null?'—':r.roas.toFixed(2)+'x';
+    if(metric==='spend')return money(r.spend);
+    if(metric==='cpl')return r.cpl==null?'—':money(r.cpl);
+    if(metric==='confrev')return money(r.rev_c);
     if(metric==='sales')return nf(r.sales); return metricVal(r)+'%'; }
   function drawBars(cur){
-    var list=cur.rows.filter(function(r){return (!activeOnly||watch.indexOf(r.ad)>=0)&&r.leads>=minLeads;});
+    var spendMetric=(metric==='spend'||metric==='roas'||metric==='cpl');
+    var list=cur.rows.filter(function(r){
+      if(activeOnly&&watch.indexOf(r.ad)<0)return false;
+      return spendMetric ? r.spend>0 : r.leads>=minLeads; });
     list.sort(function(a,b){return metricVal(b)-metricVal(a);});
     var max=Math.max.apply(null,[1].concat(list.map(metricVal)));
     var host=document.getElementById('adx-bars');
@@ -427,12 +452,15 @@ export function renderBody(data) {
           +'<span class="adx-minibar"><i style="width:'+mb+'%;background:'+GC[r.group]+'"></i></span></td>'
         +'<td class="num">'+nf(r.leads)+'</td><td class="num">'+r.va+'</td><td class="num">'+r.t+'</td>'
         +'<td class="num">'+r.appts+'</td><td class="num">'+r.appt_rate+'%</td><td class="num">'+r.showed+'</td>'
-        +'<td class="num">'+r.sales+'</td><td class="num">'+r.sale_rate+'%</td><td class="num">'+r.close_rate+'%</td>'
-        +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td></tr>';
+        +'<td class="num">'+(r.spend?money(r.spend):'—')+'</td><td class="num">'+(r.cpl==null?'—':money(r.cpl))+'</td>'
+        +'<td class="num">'+r.sales+'</td><td class="num">'+(r.cps==null?'—':money(r.cps))+'</td>'
+        +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td>'
+        +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td></tr>';
     }).join('');
     if(cur.unattributedSales>0 && !search && !hideZero){
-      html+='<tr class="unattr"><td>(No Ad Creative — organic / referral)</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
-        +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
+      html+='<tr class="unattr"><td>(No Ad Creative — organic / referral)</td>'
+        +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+        +'<td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
     }
     document.getElementById('adx-tbody').innerHTML=html;
     document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales

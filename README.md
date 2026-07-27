@@ -13,6 +13,8 @@ Data comes from GoHighLevel:
   (e.g. `Sale (MA)`, `Sale (MedSupp)`, …).
 - **Revenue** — projected & confirmed revenue joined from the **Master Production Sheet**
   on client name, attributed back to the ad (see **Revenue** below).
+- **Ad spend** — daily spend per ad from **Meta Ads**, matched to the ad by name, which
+  powers ROAS, cost-per-lead, and cost-per-sale (see **Ad spend** below).
 
 Open **`dashboard.html`** in any browser. It is a single self-contained file — no
 server, no build step needed just to view it. Deployed, it runs as a small web
@@ -182,6 +184,32 @@ The build finds the header row automatically and looks for columns named `Client
 > publish **that** tab. The dashboard only needs those fields, and its saved output
 > never stores names or phones — only per-ad revenue totals.
 
+## Ad spend (Meta Ads)
+
+Daily ad spend comes from Meta Ads and is matched to each ad **by ad name** (Meta's ad
+name equals the GHL "Ad Creative" value, case/space-insensitive). Spend is stored per
+day, so it filters by date range like everything else. It drives:
+
+- KPI tiles: **Ad Spend**, **ROAS (confirmed)**, **Cost / Sale**.
+- Table columns: **Spend**, **Cost/Lead**, **Cost/Sale**, **ROAS**.
+- The "which ads to scale" chart can rank by **ROAS**, **Spend**, or **Cost / lead**.
+- **ROAS = confirmed revenue ÷ spend** (projected ROAS shown alongside).
+
+Date basis: spend counts on the **day it was spent**; sales & revenue by **sale date**;
+leads & appointments by **arrival date**. Ads that spent but produced no tracked leads
+still appear (so wasted spend is visible).
+
+The committed `data/spend_daily.json` is a snapshot pulled from Meta. To refresh spend
+live on each rebuild, set two more Railway Variables:
+
+| Variable | Value |
+|----------|-------|
+| `META_ACCESS_TOKEN` | a Meta (Facebook) Graph API token with `ads_read` on the ad account |
+| `META_AD_ACCOUNT_ID` | `1013146170341029` (Mohr Insurance Services) |
+
+With those set, the build pulls daily spend from the Graph API on each refresh; without
+them it serves the committed `spend_daily.json` snapshot so spend still shows.
+
 ## Files
 
 | File | Purpose |
@@ -189,6 +217,7 @@ The build finds the header row automatically and looks for columns named `Client
 | `dashboard.html` | The rendered dashboard — open this. |
 | `server.mjs` | Web server for deployment (Railway). Serves the dashboard + optional live refresh. |
 | `data/dashboard_data.json` | The aggregated numbers behind the dashboard. |
+| `data/spend_daily.json` | Meta ad-spend snapshot (daily, by ad) used when no Meta token is set. |
 | `build-dashboard.mjs` | Pulls live data from GoHighLevel and regenerates everything. |
 | `render.mjs` | Turns the dataset into the HTML (shared by the build script). |
 | `config.json` | Your active-ads list (shared defaults). |
