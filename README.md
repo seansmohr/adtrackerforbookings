@@ -142,6 +142,7 @@ add these **service Variables** in Railway:
 | `GHL_API_TOKEN` | your GoHighLevel Private Integration token (see below) |
 | `GHL_LOCATION_ID` | `dTtT96ODx29mbQcdOp0v` (already the default) |
 | `REFRESH_HOURS` | optional, default `6` — auto-refresh interval; `0` disables |
+| `ACCOUNT_TZ` | optional, default `America/Los_Angeles` — the GHL account timezone used to bucket leads by day (so "today" matches GHL) |
 | `PRODUCTION_CSV_URL` | optional — published-CSV URL of the production sheet, to attribute revenue (see **Revenue** below) |
 
 With a token set, the service pulls fresh data on boot and every `REFRESH_HOURS`,

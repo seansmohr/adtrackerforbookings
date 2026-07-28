@@ -59,7 +59,16 @@ function cfMap(c) {
   for (const f of c.customFields || []) m[f.id] = f.value;
   return m;
 }
-const day = iso => (iso || '').slice(0, 10) || null;
+// Bucket a UTC timestamp into a calendar day in the ACCOUNT's timezone (with DST),
+// so "today" matches what GoHighLevel shows. GHL stores dateAdded in UTC; a lead
+// created at 10pm Central lands on the next UTC day and would otherwise be miscounted.
+const ACCOUNT_TZ = process.env.ACCOUNT_TZ || 'America/Los_Angeles';
+const _dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: ACCOUNT_TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+const day = iso => {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return isNaN(d) ? (String(iso).slice(0, 10) || null) : _dayFmt.format(d); // en-CA -> YYYY-MM-DD
+};
 
 // Normalize a person's name for matching (lowercase, strip punctuation, collapse spaces).
 const normName = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
