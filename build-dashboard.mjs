@@ -230,7 +230,9 @@ function readConfig() {
 // Meta ad spend, daily, by ad name. If META_ACCESS_TOKEN + META_AD_ACCOUNT_ID are
 // set, pull live from the Graph API; otherwise use the committed data/spend_daily.json.
 async function fetchSpendFromMeta(token, acct) {
-  const base = `https://graph.facebook.com/v21.0/act_${acct}/insights`;
+  const ver = process.env.META_API_VERSION || 'v21.0';
+  const acctNum = String(acct).replace(/^act_/, ''); // accept "act_123" or "123"
+  const base = `https://graph.facebook.com/${ver}/act_${acctNum}/insights`;
   let url = `${base}?level=ad&fields=ad_id,ad_name,spend&time_increment=1&date_preset=maximum&limit=500&access_token=${encodeURIComponent(token)}`;
   const out = [];
   for (let guard = 0; url && guard < 200; guard++) {
