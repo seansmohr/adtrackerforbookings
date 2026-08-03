@@ -229,21 +229,32 @@ function readConfig() {
 
 // Meta ad spend, daily, by ad name. If META_ACCESS_TOKEN + META_AD_ACCOUNT_ID are
 // set, pull live from the Graph API; otherwise use the committed data/spend_daily.json.
+// The insights endpoint rejects "every ad × every day since inception" in one request
+// ("Please reduce the amount of data…"), so pull in month-sized windows and page each.
 async function fetchSpendFromMeta(token, acct) {
   const ver = process.env.META_API_VERSION || 'v21.0';
   const acctNum = String(acct).replace(/^act_/, ''); // accept "act_123" or "123"
   const base = `https://graph.facebook.com/${ver}/act_${acctNum}/insights`;
-  let url = `${base}?level=ad&fields=ad_id,ad_name,spend&time_increment=1&date_preset=maximum&limit=500&access_token=${encodeURIComponent(token)}`;
+  const iso = d => d.toISOString().slice(0, 10);
+  const DAY = 86400000, CHUNK = 30;
+  const today = new Date();
+  const since0 = new Date(process.env.META_SPEND_SINCE || '2026-01-01'); // account history start; override via env
   const out = [];
-  for (let guard = 0; url && guard < 200; guard++) {
-    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
-    if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta insights ${res.status} ${b.slice(0, 200)}`); }
-    const j = await res.json();
-    for (const r of j.data || []) {
-      const v = parseFloat(r.spend);
-      if (isFinite(v) && v > 0) out.push({ name: r.ad_name, id: r.ad_id, d: r.date_start, v: Math.round(v * 100) / 100 });
+  for (let s = new Date(since0); s <= today; s = new Date(s.getTime() + CHUNK * DAY)) {
+    const since = iso(s);
+    const until = iso(new Date(Math.min(today.getTime(), s.getTime() + (CHUNK - 1) * DAY)));
+    const range = encodeURIComponent(JSON.stringify({ since, until }));
+    let url = `${base}?level=ad&fields=ad_id,ad_name,spend&time_increment=1&time_range=${range}&limit=500&access_token=${encodeURIComponent(token)}`;
+    for (let guard = 0; url && guard < 50; guard++) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+      if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta insights ${res.status} ${b.slice(0, 200)} [window ${since}..${until}]`); }
+      const j = await res.json();
+      for (const r of j.data || []) {
+        const v = parseFloat(r.spend);
+        if (isFinite(v) && v > 0) out.push({ name: r.ad_name, id: r.ad_id, d: r.date_start, v: Math.round(v * 100) / 100 });
+      }
+      url = j.paging && j.paging.next ? j.paging.next : null;
     }
-    url = j.paging && j.paging.next ? j.paging.next : null;
   }
   return out;
 }
@@ -257,9 +268,8 @@ async function loadSpend() {
       console.error('Meta returned no spend rows — using committed spend snapshot.');
       var note = 'Meta returned no rows';
     } catch (e) {
-      console.error('Meta spend fetch FAILED: ' + e.message + ' — using committed spend snapshot. '
-        + 'Check META_ACCESS_TOKEN is a valid ads_read access token (starts with EAA), not an app secret.');
-      note = 'Meta fetch failed: ' + e.message.slice(0, 120);
+      console.error('Meta spend fetch FAILED: ' + e.message + ' — using committed spend snapshot.');
+      note = 'Meta fetch failed: ' + e.message.slice(0, 140);
     }
   } else {
     note = 'META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set';
