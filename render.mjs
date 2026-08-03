@@ -130,6 +130,7 @@ export function renderBody(data) {
     <span class="adx-basis">Spend by <b>spend date</b> · sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date · ROAS = confirmed revenue ÷ spend</span>
   </div>
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
+  <p class="adx-refresh-msg err" id="adx-spend-warn" hidden></p>
 
   <div class="adx-kpis" id="adx-kpis"></div>
   <div class="adx-callout" id="adx-callout"></div>
@@ -253,7 +254,11 @@ export function renderBody(data) {
       .then(function(j){
         if(j&&j.ok){ showMsg('Updated. Reloading with the latest numbers…','ok'); setTimeout(function(){location.reload();},700); return; }
         refreshBtn.disabled=false; refreshBtn.textContent=old;
-        if(j&&j.skipped){ showMsg('Refresh isn\\u2019t enabled: '+j.skipped+'. Add GHL_API_TOKEN in Railway (Variables tab) to turn it on.','err'); }
+        if(j&&(j.skipped==='in_progress'||j.skipped==='already refreshing')){
+          showMsg('A refresh is already running (the app also auto-refreshes after each deploy). Give it ~30–60 seconds, then click Refresh again.'); }
+        else if(j&&(j.skipped==='no_token'||j.skipped==='no GHL_API_TOKEN set')){
+          showMsg('Refresh isn\\u2019t enabled: no GHL API token. Add GHL_API_TOKEN in Railway (Variables tab) to turn it on.','err'); }
+        else if(j&&j.skipped){ showMsg('Refresh unavailable: '+j.skipped,'err'); }
         else if(j&&j.error){ showMsg('Refresh failed: '+j.error,'err'); }
         else { showMsg('Refresh failed. Check the service logs in Railway.','err'); }
       })
@@ -347,7 +352,7 @@ export function renderBody(data) {
     var apptRate=tot.leads?100*tot.appts/tot.leads:0;
     var roas=tot.spend?tot.rev_c/tot.spend:null, roasP=tot.spend?tot.rev_p/tot.spend:null;
     var kpis=[
-      {lbl:'Ad Spend', val:money(tot.spend), note:'Meta · '+(tot.leads?money(tot.spend/tot.leads)+'/lead':'—')},
+      {lbl:'Ad Spend', val:money(tot.spend), note:(DATA.meta.spend_live?'Meta live':'snapshot')+(DATA.meta.spend_to?' · thru '+DATA.meta.spend_to.slice(5):'')},
       {lbl:'Leads', val:nf(tot.leads), note:apptRate.toFixed(1)+'% booked'},
       {lbl:'Sales', val:nf(cur.totalSales), note:tot.sales+' from ads · '+cur.unattributedSales+' no ad creative'},
       {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:money(tot.rev_p)+' projected', rev:true},
@@ -471,6 +476,17 @@ export function renderBody(data) {
     document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
       +'. Appointment window covers VA + Turning 65 calendars. “Sale” = Appointment Status containing “Sale”.';
   }
+
+  // Spend connection status: warn when spend is a committed snapshot, not live from Meta.
+  (function(){
+    var w=document.getElementById('adx-spend-warn'); if(!w) return;
+    if(DATA.meta && DATA.meta.spend_connected && !DATA.meta.spend_live){
+      w.hidden=false;
+      w.textContent='⚠ Ad spend is a saved snapshot'+(DATA.meta.spend_to?' (through '+DATA.meta.spend_to+')':'')
+        +', not live from Meta'+(DATA.meta.spend_note?' — '+DATA.meta.spend_note:'')
+        +'. Set a valid META_ACCESS_TOKEN (ads_read, starts with “EAA”) in Railway to auto-update.';
+    }
+  })();
 
   render();
 })();

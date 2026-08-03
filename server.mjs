@@ -21,11 +21,15 @@ const REFRESH_HOURS = process.env.REFRESH_HOURS != null ? Number(process.env.REF
 
 let lastRefresh = null;
 let refreshing = false;
+let refreshStartedAt = 0;
+// If a refresh somehow hangs (e.g. a stuck upstream fetch), don't block new ones forever.
+const REFRESH_STALE_MS = 8 * 60 * 1000;
 
 async function refresh(reason) {
-  if (!process.env.GHL_API_TOKEN) return { ok: false, skipped: 'no GHL_API_TOKEN set' };
-  if (refreshing) return { ok: false, skipped: 'already refreshing' };
+  if (!process.env.GHL_API_TOKEN) return { ok: false, skipped: 'no_token' };
+  if (refreshing && (Date.now() - refreshStartedAt) < REFRESH_STALE_MS) return { ok: false, skipped: 'in_progress' };
   refreshing = true;
+  refreshStartedAt = Date.now();
   try {
     const { build } = await import('./build-dashboard.mjs');
     const data = await build();

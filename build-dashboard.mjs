@@ -34,7 +34,7 @@ const headers = { Authorization: `Bearer ${TOKEN}`, Version: VERSION, Accept: 'a
 
 async function api(path, opts = {}) {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(API + path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+    const res = await fetch(API + path, { ...opts, signal: AbortSignal.timeout(60000), headers: { ...headers, ...(opts.headers || {}) } });
     if (res.ok) return res.json();
     // GHL/Cloudflare occasionally 504s on large reads — back off and retry a few times.
     if ((res.status === 504 || res.status === 502 || res.status === 429) && attempt < 4) {
@@ -151,7 +151,7 @@ async function fetchProduction() {
   const url = process.env.PRODUCTION_CSV_URL;
   const empty = { byPhone: new Map(), byName: new Map(), clients: 0, connected: false };
   if (!url) return empty;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
   if (!res.ok) throw new Error(`production sheet ${res.status} ${res.statusText}`);
   const text = await res.text();
   if (/^\s*</.test(text)) {
@@ -234,7 +234,7 @@ async function fetchSpendFromMeta(token, acct) {
   let url = `${base}?level=ad&fields=ad_id,ad_name,spend&time_increment=1&date_preset=maximum&limit=500&access_token=${encodeURIComponent(token)}`;
   const out = [];
   for (let guard = 0; url && guard < 200; guard++) {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
     if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta insights ${res.status} ${b.slice(0, 200)}`); }
     const j = await res.json();
     for (const r of j.data || []) {
@@ -249,16 +249,27 @@ async function fetchSpendFromMeta(token, acct) {
 async function loadSpend() {
   const token = process.env.META_ACCESS_TOKEN, acct = process.env.META_AD_ACCOUNT_ID;
   if (token && acct) {
-    try { const s = await fetchSpendFromMeta(token, acct); if (s.length) return s; }
-    catch (e) { console.error('Meta spend fetch failed (' + e.message + ') — using committed spend snapshot'); }
+    try {
+      const s = await fetchSpendFromMeta(token, acct);
+      if (s.length) { console.error(`Meta spend: live (${s.length} ad-days).`); return { recs: s, live: true, note: null }; }
+      console.error('Meta returned no spend rows — using committed spend snapshot.');
+      var note = 'Meta returned no rows';
+    } catch (e) {
+      console.error('Meta spend fetch FAILED: ' + e.message + ' — using committed spend snapshot. '
+        + 'Check META_ACCESS_TOKEN is a valid ads_read access token (starts with EAA), not an app secret.');
+      note = 'Meta fetch failed: ' + e.message.slice(0, 120);
+    }
+  } else {
+    note = 'META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set';
   }
-  try { return JSON.parse(fs.readFileSync('./data/spend_daily.json', 'utf8')); }
-  catch { return []; }
+  try { return { recs: JSON.parse(fs.readFileSync('./data/spend_daily.json', 'utf8')), live: false, note }; }
+  catch { return { recs: [], live: false, note }; }
 }
 
 // Fold daily spend into the data model: union its ad names into data.ads and emit
 // per-day spend records keyed to the ad index (matched case/space-insensitively).
-function mergeSpend(data, spendRecs) {
+function mergeSpend(data, spend) {
+  const spendRecs = spend.recs || [];
   const norm = s => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
   const nidx = new Map();
   data.ads.forEach((a, i) => { if (!nidx.has(norm(a))) nidx.set(norm(a), i); });
@@ -275,7 +286,9 @@ function mergeSpend(data, spendRecs) {
   data.meta.spend_from = dates[0] || null;
   data.meta.spend_to = dates[dates.length - 1] || null;
   data.meta.spend_connected = recs.length > 0;
-  data.meta.spend_source = 'Meta Ads — daily spend by ad name';
+  data.meta.spend_live = !!spend.live;                 // true only when pulled live from Meta this build
+  data.meta.spend_note = spend.live ? null : (spend.note || null);
+  data.meta.spend_source = spend.live ? 'Meta Ads — live' : 'Meta Ads — committed snapshot (not live)';
   return data;
 }
 
