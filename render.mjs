@@ -51,6 +51,10 @@ export function renderBody(data) {
   .adx-refresh-msg.err{border-color:var(--series-test);color:var(--text-primary);}
   .adx-refresh-msg.ok{border-color:var(--good);}
 
+  .adx-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:0 0 20px;}
+  .adx-tabs button.t{border:0;background:transparent;color:var(--text-secondary);font:inherit;font-size:0.92rem;font-weight:600;padding:9px 15px;border-radius:9px 9px 0 0;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .adx-tabs button.t:hover{color:var(--text-primary);}
+  .adx-tabs button.t[aria-pressed="true"]{color:var(--text-primary);border-bottom-color:var(--accent);}
   .adx-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:22px;}
   @media (max-width:980px){.adx-kpis{grid-template-columns:repeat(3,1fr);}}
   @media (max-width:640px){.adx-kpis{grid-template-columns:repeat(2,1fr);}}
@@ -132,6 +136,12 @@ export function renderBody(data) {
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
   <p class="adx-refresh-msg err" id="adx-spend-warn" hidden></p>
 
+  <nav class="adx-tabs" id="adx-tabs">
+    <button class="t" data-v="ads" aria-pressed="true">Ad creatives</button>
+    <button class="t" data-v="campaigns" aria-pressed="false">Campaigns &amp; ad sets</button>
+  </nav>
+
+  <div id="adx-view-ads">
   <div class="adx-kpis" id="adx-kpis"></div>
   <div class="adx-callout" id="adx-callout"></div>
 
@@ -196,6 +206,61 @@ export function renderBody(data) {
     </div>
     <p class="adx-foot" id="adx-foot"></p>
   </div>
+  </div><!-- /view: ads -->
+
+  <div id="adx-view-campaigns" hidden>
+    <div class="adx-kpis" id="adx-ckpis"></div>
+    <div class="adx-callout" id="adx-ccallout"></div>
+
+    <div class="adx-panel">
+      <h2>Campaign ROAS</h2>
+      <p class="phint">Spend comes straight from Meta at the campaign level. Leads, appointments, sales and revenue are rolled up from the ad creatives inside each campaign. Click a column to sort; cost columns sort cheapest-first.</p>
+      <div class="adx-tablewrap">
+        <table class="adx-t" id="adx-ctable"><thead><tr>
+          <th data-k="name">Campaign</th>
+          <th data-k="spend">Spend</th>
+          <th data-k="leads">Leads</th>
+          <th data-k="cpl">Cost/Lead</th>
+          <th data-k="appts">Appts</th>
+          <th data-k="cpa">Cost/Appt</th>
+          <th data-k="sales">Sales</th>
+          <th data-k="cps">Cost/Sale</th>
+          <th data-k="rev_c">Conf $</th>
+          <th data-k="rev_p">Proj $</th>
+          <th data-k="roas">ROAS</th>
+        </tr></thead><tbody id="adx-cbody"></tbody></table>
+      </div>
+      <p class="adx-foot" id="adx-cfoot"></p>
+    </div>
+
+    <div class="adx-panel">
+      <h2>Ad set ROAS</h2>
+      <p class="phint">Same metrics one level down. Use the campaign filter to focus on a single campaign's ad sets.</p>
+      <div class="adx-controls">
+        <label>Campaign
+          <select id="adx-cfilter" style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:inherit;font-size:0.82rem;color:var(--text-primary);"></select>
+        </label>
+        <label><input type="checkbox" id="adx-shide"> Hide ad sets with no spend</label>
+      </div>
+      <div class="adx-tablewrap">
+        <table class="adx-t" id="adx-stable"><thead><tr>
+          <th data-k="name">Ad set</th>
+          <th data-k="spend">Spend</th>
+          <th data-k="leads">Leads</th>
+          <th data-k="cpl">Cost/Lead</th>
+          <th data-k="appts">Appts</th>
+          <th data-k="cpa">Cost/Appt</th>
+          <th data-k="sales">Sales</th>
+          <th data-k="cps">Cost/Sale</th>
+          <th data-k="rev_c">Conf $</th>
+          <th data-k="rev_p">Proj $</th>
+          <th data-k="roas">ROAS</th>
+        </tr></thead><tbody id="adx-sbody"></tbody></table>
+      </div>
+      <p class="adx-foot" id="adx-sfoot"></p>
+    </div>
+  </div><!-- /view: campaigns -->
+
   <datalist id="adx-adlist"></datalist>
 </div></div>
 
@@ -373,6 +438,7 @@ export function renderBody(data) {
     document.getElementById('adx-callout').innerHTML=co||'No ad activity in this date range.';
 
     drawWatch(cur); drawActiveTable(cur); drawBars(cur); drawTable(cur);
+    renderGroups();
   }
 
   function rowByAd(cur){var m={};cur.rows.forEach(function(r){m[r.ad]=r;});return m;}
@@ -476,6 +542,125 @@ export function renderBody(data) {
     document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
       +'. Appointment window covers VA + Turning 65 calendars. “Sale” = Appointment Status containing “Sale”.';
   }
+
+  // ---------- Campaigns & ad sets view ----------
+  var CAMPS=DATA.campaigns||[], ADSETS=DATA.adsets||[];
+  var CSPEND=DATA.campaignSpend||[], ASPEND=DATA.adsetSpend||[];
+  var AD2C=DATA.adCampaign||{}, AD2S=DATA.adAdset||{};
+  var csortK='spend', csortDir=-1, ssortK='spend', ssortDir=-1, cfilter='', shideNoSpend=false;
+  var ASC={name:1,cpl:1,cpa:1,cps:1};
+
+  // Aggregate leads/appts/sales/revenue by campaign (kind 'c') or ad set (kind 's'),
+  // rolling up from the ad creatives that belong to each, plus Meta spend at that level.
+  function aggregateGroups(kind){
+    var names = kind==='c'?CAMPS:ADSETS, map = kind==='c'?AD2C:AD2S, spend = kind==='c'?CSPEND:ASPEND, key = kind==='c'?'c':'s';
+    var m={};
+    for(var i=0;i<names.length;i++) m[i]={i:i,name:names[i],leads:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0};
+    for(var j=0;j<C.length;j++){
+      var r=C[j], gi=map[r.a];
+      if(gi==null) continue;
+      var g=m[gi]; if(!g) continue;
+      if(inRange(r.d)){ g.leads++; if(r.va||r.t) g.appts++; }
+      if(inRange(r.sd||r.d)){ if(r.s) g.sales++; g.rev_p+=r.pr||0; g.rev_c+=r.cr||0; }
+    }
+    for(var k=0;k<spend.length;k++){ var sp=spend[k]; if(!inRange(sp.d))continue; var gg=m[sp[key]]; if(gg) gg.spend+=sp.v; }
+    var rows=[];
+    for(var x in m){ var a=m[x];
+      if(!a.leads && !a.sales && !a.spend && !a.rev_p && !a.rev_c) continue;
+      a.spend=Math.round(a.spend*100)/100;
+      a.cpl=(a.spend>0&&a.leads>0)?a.spend/a.leads:null;
+      a.cpa=(a.spend>0&&a.appts>0)?a.spend/a.appts:null;
+      a.cps=(a.spend>0&&a.sales>0)?a.spend/a.sales:null;
+      a.roas=(a.spend>0)?a.rev_c/a.spend:null;
+      a.roas_p=(a.spend>0)?a.rev_p/a.spend:null;
+      rows.push(a); }
+    return rows;
+  }
+  function sortRows(rows,k,dir){
+    return rows.sort(function(a,b){var x=a[k],y=b[k];
+      if(typeof x==='string'||typeof y==='string')return String(x).localeCompare(String(y))*dir;
+      if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1;
+      return (x-y)*dir;});
+  }
+  function groupCells(r){
+    return '<td class="num">'+(r.spend?money(r.spend):'—')+'</td>'
+      +'<td class="num">'+nf(r.leads)+'</td><td class="num">'+(r.cpl==null?'—':money(r.cpl))+'</td>'
+      +'<td class="num">'+r.appts+'</td><td class="num">'+(r.cpa==null?'—':money(r.cpa))+'</td>'
+      +'<td class="num">'+r.sales+'</td><td class="num">'+(r.cps==null?'—':money(r.cps))+'</td>'
+      +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td>'
+      +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td>';
+  }
+  function renderGroups(){
+    var crows=aggregateGroups('c'), srows=aggregateGroups('s');
+    // KPIs (campaign level totals)
+    var t={spend:0,leads:0,appts:0,sales:0,rev_c:0,rev_p:0};
+    crows.forEach(function(r){t.spend+=r.spend;t.leads+=r.leads;t.appts+=r.appts;t.sales+=r.sales;t.rev_c+=r.rev_c;t.rev_p+=r.rev_p;});
+    var roas=t.spend?t.rev_c/t.spend:null;
+    var kp=[
+      {lbl:'Ad Spend', val:money(t.spend), note:crows.length+' campaigns'},
+      {lbl:'Leads', val:nf(t.leads), note:'from tracked ads'},
+      {lbl:'Sales', val:nf(t.sales), note:'attributed'},
+      {lbl:'Confirmed Revenue', val:money(t.rev_c), note:money(t.rev_p)+' projected', rev:true},
+      {lbl:'ROAS (confirmed)', val:roas==null?'—':roas.toFixed(2)+'x', note:t.spend?(t.rev_p/t.spend).toFixed(2)+'x projected':'', rev:roas!=null&&roas>=1},
+      {lbl:'Cost / Sale', val:t.sales?money(t.spend/t.sales):'—', note:'spend ÷ sales'}
+    ];
+    document.getElementById('adx-ckpis').innerHTML=kp.map(function(k){
+      return '<div class="adx-kpi'+(k.rev?' rev':'')+'"><div class="lbl">'+k.lbl+'</div><div class="val">'+k.val+'</div><div class="note">'+k.note+'</div></div>';}).join('');
+    var best=crows.filter(function(r){return r.spend>=100&&r.roas!=null;}).slice().sort(function(a,b){return b.roas-a.roas;})[0];
+    var bigC=crows.slice().sort(function(a,b){return b.spend-a.spend;})[0];
+    var co='';
+    if(best) co+='<b>Best campaign ROAS:</b> “'+esc(best.name)+'” — '+best.roas.toFixed(2)+'x ('+money(best.rev_c)+' on '+money(best.spend)+'). ';
+    if(bigC) co+='<span class="pill"><b>Highest spend:</b> “'+esc(bigC.name)+'” — '+money(bigC.spend)+(bigC.roas!=null?' ('+bigC.roas.toFixed(2)+'x)':'')+'.</span>';
+    document.getElementById('adx-ccallout').innerHTML=co||'No campaign activity in this date range.';
+
+    // campaign table
+    sortRows(crows,csortK,csortDir);
+    document.querySelectorAll('#adx-ctable thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===csortK);});
+    document.getElementById('adx-cbody').innerHTML=crows.map(function(r){
+      return '<tr><td>'+esc(r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
+    document.getElementById('adx-cfoot').textContent='Showing '+crows.length+' campaigns with activity in range. Spend is Meta campaign spend; revenue is rolled up from ad creatives matched to GoHighLevel.';
+
+    // campaign filter for ad sets
+    var sel=document.getElementById('adx-cfilter');
+    if(sel && sel.options.length!==CAMPS.length+1){
+      sel.innerHTML='<option value="">All campaigns</option>'+CAMPS.map(function(n,i){return '<option value="'+i+'">'+esc(n)+'</option>';}).join('');
+      sel.value=cfilter;
+      sel.onchange=function(){cfilter=sel.value;renderGroups();};
+    }
+    // which ad sets belong to the selected campaign (via the ads inside them)
+    var allowed=null;
+    if(cfilter!==''){ allowed={}; for(var ai in AD2C){ if(String(AD2C[ai])===String(cfilter) && AD2S[ai]!=null) allowed[AD2S[ai]]=1; } }
+    var sview=srows.filter(function(r){
+      if(allowed && !allowed[r.i]) return false;
+      if(shideNoSpend && !r.spend) return false;
+      return true; });
+    sortRows(sview,ssortK,ssortDir);
+    document.querySelectorAll('#adx-stable thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===ssortK);});
+    document.getElementById('adx-sbody').innerHTML=sview.map(function(r){
+      return '<tr><td>'+esc(r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
+    document.getElementById('adx-sfoot').textContent='Showing '+sview.length+' of '+srows.length+' ad sets with activity in range.';
+  }
+  document.querySelectorAll('#adx-ctable thead th').forEach(function(th){
+    th.onclick=function(){var k=th.dataset.k; if(k===csortK){csortDir*=-1;}else{csortK=k;csortDir=ASC[k]?1:-1;} renderGroups();};});
+  document.querySelectorAll('#adx-stable thead th').forEach(function(th){
+    th.onclick=function(){var k=th.dataset.k; if(k===ssortK){ssortDir*=-1;}else{ssortK=k;ssortDir=ASC[k]?1:-1;} renderGroups();};});
+  var shideEl=document.getElementById('adx-shide');
+  if(shideEl) shideEl.onchange=function(e){shideNoSpend=e.target.checked;renderGroups();};
+
+  // ---------- tab switching ----------
+  (function(){
+    var views={ads:document.getElementById('adx-view-ads'), campaigns:document.getElementById('adx-view-campaigns')};
+    document.querySelectorAll('#adx-tabs button.t').forEach(function(b){
+      b.onclick=function(){
+        var v=b.dataset.v;
+        document.querySelectorAll('#adx-tabs button.t').forEach(function(x){x.setAttribute('aria-pressed', String(x.dataset.v===v));});
+        for(var k in views){ if(views[k]) views[k].hidden = (k!==v); }
+        try{ localStorage.setItem('adx_tab', v); }catch(e){}
+      };
+    });
+    var saved=null; try{ saved=localStorage.getItem('adx_tab'); }catch(e){}
+    if(saved==='campaigns'){ var btn=document.querySelector('#adx-tabs button.t[data-v="campaigns"]'); if(btn) btn.click(); }
+  })();
 
   // Spend connection status: warn when spend is a committed snapshot, not live from Meta.
   (function(){

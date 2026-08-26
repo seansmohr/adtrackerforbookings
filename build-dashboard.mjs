@@ -259,14 +259,88 @@ async function fetchSpendFromMeta(token, acct) {
   return out;
 }
 
+// Daily spend at campaign or adset level, windowed the same way as ad level.
+async function fetchLevelSpendFromMeta(token, acct, level) {
+  const ver = process.env.META_API_VERSION || 'v21.0';
+  const acctNum = String(acct).replace(/^act_/, '');
+  const base = `https://graph.facebook.com/${ver}/act_${acctNum}/insights`;
+  const idF = level === 'campaign' ? 'campaign_id,campaign_name' : 'adset_id,adset_name';
+  const iso = d => d.toISOString().slice(0, 10);
+  const DAY = 86400000, CHUNK = 30;
+  const today = new Date();
+  const since0 = new Date(process.env.META_SPEND_SINCE || '2026-01-01');
+  const out = [];
+  for (let s = new Date(since0); s <= today; s = new Date(s.getTime() + CHUNK * DAY)) {
+    const since = iso(s);
+    const until = iso(new Date(Math.min(today.getTime(), s.getTime() + (CHUNK - 1) * DAY)));
+    const range = encodeURIComponent(JSON.stringify({ since, until }));
+    let url = `${base}?level=${level}&fields=${idF},spend&time_increment=1&time_range=${range}&limit=500&access_token=${encodeURIComponent(token)}`;
+    for (let guard = 0; url && guard < 50; guard++) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+      if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta ${level} insights ${res.status} ${b.slice(0, 160)}`); }
+      const j = await res.json();
+      for (const r of j.data || []) {
+        const v = parseFloat(r.spend);
+        if (!isFinite(v) || v <= 0) continue;
+        out.push({ name: (level === 'campaign' ? r.campaign_name : r.adset_name) || '(unnamed)', d: r.date_start, v: Math.round(v * 100) / 100 });
+      }
+      url = j.paging && j.paging.next ? j.paging.next : null;
+    }
+  }
+  return out;
+}
+
+// ad name -> { campaign, adset } names, so ad-level revenue can roll up.
+async function fetchHierarchyFromMeta(token, acct) {
+  const ver = process.env.META_API_VERSION || 'v21.0';
+  const acctNum = String(acct).replace(/^act_/, '');
+  let url = `https://graph.facebook.com/${ver}/act_${acctNum}/ads`
+    + `?fields=name,campaign{name},adset{name}&limit=300&access_token=${encodeURIComponent(token)}`;
+  const map = {};
+  for (let guard = 0; url && guard < 50; guard++) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+    if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta ads edge ${res.status} ${b.slice(0, 160)}`); }
+    const j = await res.json();
+    for (const a of j.data || []) {
+      if (!a.name) continue;
+      map[a.name.toLowerCase().replace(/\s+/g, ' ').trim()] = {
+        campaign: (a.campaign && a.campaign.name) || '(unknown campaign)',
+        adset: (a.adset && a.adset.name) || '(unknown ad set)',
+      };
+    }
+    url = j.paging && j.paging.next ? j.paging.next : null;
+  }
+  return map;
+}
+
+function readJsonOr(path, fallback) {
+  try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return fallback; }
+}
+
+const SNAP = {
+  recs: () => readJsonOr('./data/spend_daily.json', []),
+  camp: () => readJsonOr('./data/campaign_spend_daily.json', []),
+  adset: () => readJsonOr('./data/adset_spend_daily.json', []),
+  hier: () => readJsonOr('./data/ad_hierarchy.json', {}),
+};
+
 async function loadSpend() {
   const token = process.env.META_ACCESS_TOKEN, acct = process.env.META_AD_ACCOUNT_ID;
+  let note;
   if (token && acct) {
     try {
-      const s = await fetchSpendFromMeta(token, acct);
-      if (s.length) { console.error(`Meta spend: live (${s.length} ad-days).`); return { recs: s, live: true, note: null }; }
+      const [s, camp, adset, hier] = await Promise.all([
+        fetchSpendFromMeta(token, acct),
+        fetchLevelSpendFromMeta(token, acct, 'campaign'),
+        fetchLevelSpendFromMeta(token, acct, 'adset'),
+        fetchHierarchyFromMeta(token, acct),
+      ]);
+      if (s.length || camp.length) {
+        console.error(`Meta spend: live (${s.length} ad-days, ${camp.length} campaign-days, ${adset.length} adset-days, ${Object.keys(hier).length} ads mapped).`);
+        return { recs: s, camp, adset, hier, live: true, note: null };
+      }
       console.error('Meta returned no spend rows — using committed spend snapshot.');
-      var note = 'Meta returned no rows';
+      note = 'Meta returned no rows';
     } catch (e) {
       console.error('Meta spend fetch FAILED: ' + e.message + ' — using committed spend snapshot.');
       note = 'Meta fetch failed: ' + e.message.slice(0, 140);
@@ -274,8 +348,7 @@ async function loadSpend() {
   } else {
     note = 'META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set';
   }
-  try { return { recs: JSON.parse(fs.readFileSync('./data/spend_daily.json', 'utf8')), live: false, note }; }
-  catch { return { recs: [], live: false, note }; }
+  return { recs: SNAP.recs(), camp: SNAP.camp(), adset: SNAP.adset(), hier: SNAP.hier(), live: false, note };
 }
 
 // Fold daily spend into the data model: union its ad names into data.ads and emit
@@ -301,6 +374,32 @@ function mergeSpend(data, spend) {
   data.meta.spend_live = !!spend.live;                 // true only when pulled live from Meta this build
   data.meta.spend_note = spend.live ? null : (spend.note || null);
   data.meta.spend_source = spend.live ? 'Meta Ads — live' : 'Meta Ads — committed snapshot (not live)';
+
+  // ---- campaign / ad set level (for the Campaigns & ad sets view) ----
+  const campRows = spend.camp || [], adsetRows = spend.adset || [], hier = spend.hier || {};
+  const camps = [], cidx = new Map(), adsets = [], sidx = new Map();
+  const idxOf = (list, map, name) => {
+    const k = norm(name);
+    if (!map.has(k)) { map.set(k, list.length); list.push(name); }
+    return map.get(k);
+  };
+  data.campaignSpend = campRows.map(r => ({ c: idxOf(camps, cidx, r.name || '(unnamed campaign)'), d: r.d, v: r.v }));
+  data.adsetSpend = adsetRows.map(r => ({ s: idxOf(adsets, sidx, r.name || '(unnamed ad set)'), d: r.d, v: r.v }));
+  // make sure every campaign/ad set referenced by the hierarchy exists, even with no spend
+  for (const h of Object.values(hier)) { idxOf(camps, cidx, h.campaign); idxOf(adsets, sidx, h.adset); }
+  const adCampaign = {}, adAdset = {};
+  data.ads.forEach((adName, i) => {
+    const h = hier[norm(adName)];
+    if (!h) return;
+    adCampaign[i] = cidx.get(norm(h.campaign));
+    adAdset[i] = sidx.get(norm(h.adset));
+  });
+  data.campaigns = camps;
+  data.adsets = adsets;
+  data.adCampaign = adCampaign;
+  data.adAdset = adAdset;
+  data.meta.campaign_spend_total = Math.round(campRows.reduce((s, r) => s + r.v, 0) * 100) / 100;
+  data.meta.hierarchy_ads_mapped = Object.keys(adCampaign).length;
   return data;
 }
 

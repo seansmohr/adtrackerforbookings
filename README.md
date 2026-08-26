@@ -185,6 +185,24 @@ The build finds the header row automatically and looks for columns named `Client
 > publish **that** tab. The dashboard only needs those fields, and its saved output
 > never stores names or phones — only per-ad revenue totals.
 
+## Views (tabs)
+
+The dashboard has two views, switched by the tabs under the title (your choice is
+remembered per browser). Both share the same date range.
+
+1. **Ad creatives** — performance per GHL *Ad Creative* value: leads, VA/T65 appointments,
+   sales, revenue, spend, ROAS, cost per lead/appt/sale, plus the active-ads watchlist.
+2. **Campaigns & ad sets** — the same economics one and two levels up the Meta hierarchy:
+   **campaign ROAS** and **ad set ROAS**. Spend comes straight from Meta at that level;
+   leads / appointments / sales / revenue are rolled up from the ad creatives inside each
+   campaign or ad set (matched by Meta ad name → GHL Ad Creative). The ad set table has a
+   campaign filter and a "hide ad sets with no spend" toggle.
+
+Ads whose GHL Ad Creative value doesn't match a real Meta ad name (e.g. `{{ad.name}}`,
+raw numeric IDs) can't be placed in the hierarchy, so their revenue appears only on the
+Ad creatives tab. Campaigns that spent before an ad creative was tracked in GHL will show
+spend with zero leads — that's real, not a bug.
+
 ## Ad spend (Meta Ads)
 
 Daily ad spend comes from Meta Ads and is matched to each ad **by ad name** (Meta's ad
@@ -219,6 +237,9 @@ them it serves the committed `spend_daily.json` snapshot so spend still shows.
 | `server.mjs` | Web server for deployment (Railway). Serves the dashboard + optional live refresh. |
 | `data/dashboard_data.json` | The aggregated numbers behind the dashboard. |
 | `data/spend_daily.json` | Meta ad-spend snapshot (daily, by ad) used when no Meta token is set. |
+| `data/campaign_spend_daily.json` | Meta campaign-level daily spend snapshot (fallback). |
+| `data/adset_spend_daily.json` | Meta ad-set-level daily spend snapshot (fallback). |
+| `data/ad_hierarchy.json` | Ad name → campaign / ad set map (fallback) for rolling revenue up. |
 | `build-dashboard.mjs` | Pulls live data from GoHighLevel and regenerates everything. |
 | `render.mjs` | Turns the dataset into the HTML (shared by the build script). |
 | `config.json` | Your active-ads list (shared defaults). |
