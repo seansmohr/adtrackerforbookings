@@ -313,6 +313,30 @@ async function fetchHierarchyFromMeta(token, acct) {
   return map;
 }
 
+// Live ACTIVE/PAUSED status for ads, ad sets and campaigns. Re-read on every rebuild, so
+// turning something off in Ads Manager removes it from the dashboard on the next refresh.
+// Only effective_status === 'ACTIVE' counts as running (PAUSED / CAMPAIGN_PAUSED /
+// ADSET_PAUSED / DISAPPROVED / ARCHIVED all mean "off").
+async function fetchStatusFromMeta(token, acct) {
+  const ver = process.env.META_API_VERSION || 'v21.0';
+  const acctNum = String(acct).replace(/^act_/, '');
+  const norm = s => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+  const edges = { ads: 'ads', adsets: 'adsets', campaigns: 'campaigns' };
+  const out = { ads: {}, adsets: {}, campaigns: {} };
+  for (const [key, edge] of Object.entries(edges)) {
+    let url = `https://graph.facebook.com/${ver}/act_${acctNum}/${edge}`
+      + `?fields=name,effective_status&limit=300&access_token=${encodeURIComponent(token)}`;
+    for (let guard = 0; url && guard < 50; guard++) {
+      const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+      if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta ${edge} status ${res.status} ${b.slice(0, 160)}`); }
+      const j = await res.json();
+      for (const e of j.data || []) if (e.name) out[key][norm(e.name)] = e.effective_status || 'UNKNOWN';
+      url = j.paging && j.paging.next ? j.paging.next : null;
+    }
+  }
+  return out;
+}
+
 function readJsonOr(path, fallback) {
   try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return fallback; }
 }
@@ -322,6 +346,7 @@ const SNAP = {
   camp: () => readJsonOr('./data/campaign_spend_daily.json', []),
   adset: () => readJsonOr('./data/adset_spend_daily.json', []),
   hier: () => readJsonOr('./data/ad_hierarchy.json', {}),
+  status: () => readJsonOr('./data/meta_status.json', { ads: {}, adsets: {}, campaigns: {} }),
 };
 
 async function loadSpend() {
@@ -329,15 +354,17 @@ async function loadSpend() {
   let note;
   if (token && acct) {
     try {
-      const [s, camp, adset, hier] = await Promise.all([
+      const [s, camp, adset, hier, status] = await Promise.all([
         fetchSpendFromMeta(token, acct),
         fetchLevelSpendFromMeta(token, acct, 'campaign'),
         fetchLevelSpendFromMeta(token, acct, 'adset'),
         fetchHierarchyFromMeta(token, acct),
+        fetchStatusFromMeta(token, acct),
       ]);
       if (s.length || camp.length) {
-        console.error(`Meta spend: live (${s.length} ad-days, ${camp.length} campaign-days, ${adset.length} adset-days, ${Object.keys(hier).length} ads mapped).`);
-        return { recs: s, camp, adset, hier, live: true, note: null };
+        const nActive = Object.values(status.ads).filter(v => v === 'ACTIVE').length;
+        console.error(`Meta spend: live (${s.length} ad-days, ${camp.length} campaign-days, ${adset.length} adset-days, ${Object.keys(hier).length} ads mapped, ${nActive} ACTIVE ads).`);
+        return { recs: s, camp, adset, hier, status, live: true, note: null };
       }
       console.error('Meta returned no spend rows — using committed spend snapshot.');
       note = 'Meta returned no rows';
@@ -348,7 +375,7 @@ async function loadSpend() {
   } else {
     note = 'META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set';
   }
-  return { recs: SNAP.recs(), camp: SNAP.camp(), adset: SNAP.adset(), hier: SNAP.hier(), live: false, note };
+  return { recs: SNAP.recs(), camp: SNAP.camp(), adset: SNAP.adset(), hier: SNAP.hier(), status: SNAP.status(), live: false, note };
 }
 
 // Fold daily spend into the data model: union its ad names into data.ads and emit
@@ -398,6 +425,9 @@ function mergeSpend(data, spend) {
   data.adsets = adsets;
   data.adCampaign = adCampaign;
   data.adAdset = adAdset;
+  data.metaStatus = spend.status || { ads: {}, adsets: {}, campaigns: {} };
+  data.meta.active_ads = Object.values(data.metaStatus.ads || {}).filter(v => v === 'ACTIVE').length;
+  data.meta.active_campaigns = Object.values(data.metaStatus.campaigns || {}).filter(v => v === 'ACTIVE').length;
   data.meta.campaign_spend_total = Math.round(campRows.reduce((s, r) => s + r.v, 0) * 100) / 100;
   data.meta.hierarchy_ads_mapped = Object.keys(adCampaign).length;
   return data;

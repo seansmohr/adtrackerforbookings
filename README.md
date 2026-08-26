@@ -185,6 +185,22 @@ The build finds the header row automatically and looks for columns named `Client
 > publish **that** tab. The dashboard only needs those fields, and its saved output
 > never stores names or phones — only per-ad revenue totals.
 
+## Active-only filter
+
+By default the dashboard shows **only what is currently ACTIVE in Meta Ads Manager** —
+ads, campaigns and ad sets. Status is read from Meta's `effective_status` on **every
+refresh**, so pausing or turning something off in Ads Manager removes it from the
+dashboard on the next refresh (and un-pausing brings it back). Only `ACTIVE` counts as
+running; `PAUSED`, `CAMPAIGN_PAUSED`, `ADSET_PAUSED`, `DISAPPROVED` and `ARCHIVED` are all
+treated as off.
+
+Untick **"Active in Meta only"** in the date bar to see everything, including paused
+history — paused rows are then labelled with their Meta status. The choice is remembered
+per browser.
+
+Note that KPI totals follow the filter: with it on, spend/leads/revenue/ROAS cover the
+active ads only, so they will be lower than your lifetime account totals.
+
 ## Views (tabs)
 
 The dashboard has two views, switched by the tabs under the title (your choice is

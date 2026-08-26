@@ -110,6 +110,7 @@ export function renderBody(data) {
   .adx-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;vertical-align:baseline;flex:none;}
   .adx-name{display:inline-flex;align-items:center;gap:2px;}
   .adx-star{color:var(--star);margin-left:6px;font-size:0.85rem;}
+  .adx-off{color:var(--text-muted);font-size:0.72rem;font-weight:600;margin-left:7px;text-transform:uppercase;letter-spacing:0.04em;}
   .adx-minibar{display:inline-block;width:56px;height:8px;border-radius:4px;background:var(--track);margin-left:10px;vertical-align:middle;overflow:hidden;}
   .adx-minibar i{display:block;height:100%;border-radius:4px;}
   .adx-foot{color:var(--text-muted);font-size:0.78rem;margin-top:10px;}
@@ -128,6 +129,7 @@ export function renderBody(data) {
     <label>To <input type="date" id="adx-to"></label>
     <span class="rng" id="adx-rnglabel"></span>
     <button class="adx-linkbtn" id="adx-refresh" title="Pull fresh data from GoHighLevel and rebuild (works on the deployed app when a GHL token is configured)">↻ Refresh from GHL</button>
+    <label title="Only show ads, campaigns and ad sets whose status in Meta Ads Manager is ACTIVE. Updates on each refresh."><input type="checkbox" id="adx-activemeta" checked> <b>Active in Meta only</b></label>
     <span class="adx-basis">Spend by <b>spend date</b> · sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date · ROAS Conf = confirmed rev ÷ spend · ROAS Proj = projected rev ÷ spend</span>
   </div>
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
@@ -347,20 +349,49 @@ export function renderBody(data) {
   C.forEach(function(r){ var ad=ADS[r.a]; leadsAllByAd[ad]=(leadsAllByAd[ad]||0)+1; });
 
   var SPEND = DATA.spend || [];
+
+  // ---------- Meta ACTIVE/PAUSED status ----------
+  // Only effective_status === 'ACTIVE' counts as running; PAUSED / CAMPAIGN_PAUSED /
+  // ADSET_PAUSED / DISAPPROVED / ARCHIVED are all "off". Refreshed from Meta each rebuild,
+  // so turning an ad off in Ads Manager drops it from the dashboard on the next refresh.
+  var STATUS = DATA.metaStatus || {ads:{},campaigns:{},adsets:{}};
+  var metaOnly = true;
+  try { var sv = localStorage.getItem('adx_metaonly'); if (sv === '0') metaOnly = false; } catch(e){}
+  function statusOf(kind, name){ return (STATUS[kind]||{})[nkey(name)] || null; }
+  function isActive(kind, name){ return statusOf(kind, name) === 'ACTIVE'; }
+  // NOTE: this string is emitted inside a template literal — \\s keeps the \s in the output.
+  function nkey(s){ return String(s==null?'':s).toLowerCase().replace(/\\s+/g,' ').trim(); }
+  function adAllowed(adIdx){ return !metaOnly || isActive('ads', ADS[adIdx]); }
+  // Shown only when the Active-only filter is off, so paused rows are obvious.
+  function offTag(kind, name){
+    if(metaOnly) return '';
+    var st=statusOf(kind,name);
+    if(!st || st==='ACTIVE') return '';
+    return '<span class="adx-off" title="Meta status: '+esc(st)+'">'+esc(st.replace(/_/g,' ').toLowerCase())+'</span>';
+  }
+  // Wire the toggle here (after metaOnly exists — var hoisting would otherwise read undefined).
+  var metaChk=document.getElementById('adx-activemeta');
+  if(metaChk){
+    metaChk.checked=metaOnly;
+    metaChk.onchange=function(){ metaOnly=metaChk.checked;
+      try{ localStorage.setItem('adx_metaonly', metaOnly?'1':'0'); }catch(e){}
+      render(); };
+  }
   // ---------- aggregation for current date range ----------
   function aggregate(){
     var m={}; // adName -> row
     for(var i=0;i<ADS.length;i++){ m[ADS[i]]={ad:ADS[i],group:groupOf(ADS[i]),leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0}; }
-    for(var j=0;j<C.length;j++){ var r=C[j]; var a=m[ADS[r.a]];
+    for(var j=0;j<C.length;j++){ var r=C[j]; if(!adAllowed(r.a))continue; var a=m[ADS[r.a]];
       // Leads & appointments: counted by lead arrival date.
       if(inRange(r.d)){ a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; }
       // Sales & revenue: counted by SALE date (App Date), falling back to lead date if none.
       if(inRange(r.sd||r.d)){ if(r.s)a.sales++; a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
     }
     // Ad spend: counted on the day it was spent.
-    for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
+    for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d)||!adAllowed(sp.a))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
     var rows=[];
     for(var k in m){ var a=m[k];
+      if(metaOnly && !isActive('ads', a.ad)) continue;
       if(a.leads===0 && a.sales===0 && a.rev_p===0 && a.rev_c===0 && a.appts===0 && a.spend===0)continue;
       a.spend=Math.round(a.spend*100)/100;
       a.showed=a.vs+a.ts;
@@ -527,7 +558,7 @@ export function renderBody(data) {
       var mb=(r.leads/maxLeads*100).toFixed(1);
       var star=watch.indexOf(r.ad)>=0?'<span class="adx-star" title="Active ad">★</span>':'';
       return '<tr>'
-        +'<td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+star+'</span>'
+        +'<td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+star+offTag('ads',r.ad)+'</span>'
           +'<span class="adx-minibar"><i style="width:'+mb+'%;background:'+GC[r.group]+'"></i></span></td>'
         +'<td class="num">'+nf(r.leads)+'</td><td class="num">'+r.va+'</td><td class="num">'+r.t+'</td>'
         +'<td class="num">'+r.appts+'</td><td class="num">'+r.appt_rate+'%</td><td class="num">'+r.showed+'</td>'
@@ -544,7 +575,7 @@ export function renderBody(data) {
         +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
     }
     document.getElementById('adx-tbody').innerHTML=html;
-    document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
+    document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+(metaOnly?' ACTIVE (in Meta)':'')+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
       +'. Appointment window covers VA + Turning 65 calendars. “Sale” = Appointment Status containing “Sale”.';
   }
 
@@ -563,14 +594,16 @@ export function renderBody(data) {
     for(var i=0;i<names.length;i++) m[i]={i:i,name:names[i],leads:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0};
     for(var j=0;j<C.length;j++){
       var r=C[j], gi=map[r.a];
-      if(gi==null) continue;
+      if(gi==null || !adAllowed(r.a)) continue;
       var g=m[gi]; if(!g) continue;
       if(inRange(r.d)){ g.leads++; if(r.va||r.t) g.appts++; }
       if(inRange(r.sd||r.d)){ if(r.s) g.sales++; g.rev_p+=r.pr||0; g.rev_c+=r.cr||0; }
     }
     for(var k=0;k<spend.length;k++){ var sp=spend[k]; if(!inRange(sp.d))continue; var gg=m[sp[key]]; if(gg) gg.spend+=sp.v; }
     var rows=[];
+    var skind = kind==='c'?'campaigns':'adsets';
     for(var x in m){ var a=m[x];
+      if(metaOnly && !isActive(skind, a.name)) continue;
       if(!a.leads && !a.sales && !a.spend && !a.rev_p && !a.rev_c) continue;
       a.spend=Math.round(a.spend*100)/100;
       a.cpl=(a.spend>0&&a.leads>0)?a.spend/a.leads:null;
@@ -624,8 +657,8 @@ export function renderBody(data) {
     sortRows(crows,csortK,csortDir);
     document.querySelectorAll('#adx-ctable thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===csortK);});
     document.getElementById('adx-cbody').innerHTML=crows.map(function(r){
-      return '<tr><td>'+esc(r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
-    document.getElementById('adx-cfoot').textContent='Showing '+crows.length+' campaigns with activity in range. Spend is Meta campaign spend; revenue is rolled up from ad creatives matched to GoHighLevel.';
+      return '<tr><td>'+esc(r.name)+offTag('campaigns',r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
+    document.getElementById('adx-cfoot').textContent='Showing '+crows.length+(metaOnly?' ACTIVE':'')+' campaigns with activity in range. Spend is Meta campaign spend; revenue is rolled up from ad creatives matched to GoHighLevel.';
 
     // campaign filter for ad sets
     var sel=document.getElementById('adx-cfilter');
@@ -644,8 +677,8 @@ export function renderBody(data) {
     sortRows(sview,ssortK,ssortDir);
     document.querySelectorAll('#adx-stable thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===ssortK);});
     document.getElementById('adx-sbody').innerHTML=sview.map(function(r){
-      return '<tr><td>'+esc(r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
-    document.getElementById('adx-sfoot').textContent='Showing '+sview.length+' of '+srows.length+' ad sets with activity in range.';
+      return '<tr><td>'+esc(r.name)+offTag('adsets',r.name)+'</td>'+groupCells(r)+'</tr>';}).join('');
+    document.getElementById('adx-sfoot').textContent='Showing '+sview.length+' of '+srows.length+(metaOnly?' ACTIVE':'')+' ad sets with activity in range.';
   }
   document.querySelectorAll('#adx-ctable thead th').forEach(function(th){
     th.onclick=function(){var k=th.dataset.k; if(k===csortK){csortDir*=-1;}else{csortK=k;csortDir=ASC[k]?1:-1;} renderGroups();};});

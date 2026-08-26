@@ -1,12 +1,13 @@
 {
-  "_comment": "activeAds are the ad creatives you're currently running. Names must match the contact's 'Ad Creative' custom-field value in GHL EXACTLY (including spacing and capitalization). These seed the dashboard's Active-ads watchlist; users can also add/remove ads in the browser (saved to localStorage). When you launch a new test ad, add its exact name here and redeploy so it's the shared default.",
+  "_comment": "activeAds seeds the Ad-creatives watchlist. Since the dashboard now reads live ACTIVE/PAUSED status from Meta, this list is only a fallback for the watchlist chips; the 'Active in Meta only' filter is what actually hides paused ads. Names must match the GHL 'Ad Creative' value.",
   "activeAds": [
-    "Winning Ad Non SAC |  Retiree Mistake",
     "Winning Ad Non SAC | Never Free",
     "Winning Ad Non SAC |  Monthly Cost",
-    "AI | Test ad | Still Working 1",
-    "AI | Test ad | Nobody Telling 2",
-    "AI | Test ad | Nobody Telling 1",
-    "AI | Test ad | Still working 2"
+    "Winning Ad Non SAC |  Retiree Mistake",
+    "Winning Ad | AI 1 | August",
+    "Winning Ad | AI 2",
+    "Winning Ad | AI 3",
+    "Test Ad  | Employer 1 | August",
+    "Test Ad | Employer 2 | August"
   ]
 }
