@@ -55,10 +55,7 @@ export function renderBody(data) {
   .adx-tabs button.t{border:0;background:transparent;color:var(--text-secondary);font:inherit;font-size:0.92rem;font-weight:600;padding:9px 15px;border-radius:9px 9px 0 0;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
   .adx-tabs button.t:hover{color:var(--text-primary);}
   .adx-tabs button.t[aria-pressed="true"]{color:var(--text-primary);border-bottom-color:var(--accent);}
-  .adx-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:22px;}
-  @media (max-width:980px){.adx-kpis{grid-template-columns:repeat(3,1fr);}}
-  @media (max-width:640px){.adx-kpis{grid-template-columns:repeat(2,1fr);}}
-  @media (max-width:420px){.adx-kpis{grid-template-columns:1fr;}}
+  .adx-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:12px;margin-bottom:22px;}
   .adx-kpi.rev .val{color:var(--good);}
   .adx-kpi{background:var(--surface-1);border:1px solid var(--border);border-radius:12px;padding:14px 16px;}
   .adx-kpi .lbl{font-size:0.72rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-muted);font-weight:600;}
@@ -131,7 +128,7 @@ export function renderBody(data) {
     <label>To <input type="date" id="adx-to"></label>
     <span class="rng" id="adx-rnglabel"></span>
     <button class="adx-linkbtn" id="adx-refresh" title="Pull fresh data from GoHighLevel and rebuild (works on the deployed app when a GHL token is configured)">↻ Refresh from GHL</button>
-    <span class="adx-basis">Spend by <b>spend date</b> · sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date · ROAS = confirmed revenue ÷ spend</span>
+    <span class="adx-basis">Spend by <b>spend date</b> · sales &amp; revenue by <b>sale date</b> · leads &amp; appointments by arrival date · ROAS Conf = confirmed rev ÷ spend · ROAS Proj = projected rev ÷ spend</span>
   </div>
   <p class="adx-refresh-msg" id="adx-refresh-msg" hidden></p>
   <p class="adx-refresh-msg err" id="adx-spend-warn" hidden></p>
@@ -151,7 +148,7 @@ export function renderBody(data) {
     <div class="adx-watch" id="adx-watch"></div>
     <div class="adx-tablewrap">
       <table class="adx-t" id="adx-activetable"><thead><tr>
-        <th>Active ad</th><th>Leads</th><th>Appts</th><th>Spend</th><th>Sales</th><th>Conf $</th><th>Proj $</th><th>ROAS</th>
+        <th>Active ad</th><th>Leads</th><th>Appts</th><th>Spend</th><th>Sales</th><th>Conf $</th><th>Proj $</th><th>ROAS Conf</th><th>ROAS Proj</th>
       </tr></thead><tbody id="adx-activebody"></tbody></table>
     </div>
     <p class="adx-empty" id="adx-active-empty" hidden>No active ads yet — add one above.</p>
@@ -199,7 +196,8 @@ export function renderBody(data) {
           <th data-k="cps">Cost/Sale</th>
           <th data-k="rev_c">Conf $</th>
           <th data-k="rev_p">Proj $</th>
-          <th data-k="roas">ROAS</th>
+          <th data-k="roas">ROAS Conf</th>
+          <th data-k="roas_p">ROAS Proj</th>
         </tr></thead>
         <tbody id="adx-tbody"></tbody>
       </table>
@@ -227,7 +225,8 @@ export function renderBody(data) {
           <th data-k="cps">Cost/Sale</th>
           <th data-k="rev_c">Conf $</th>
           <th data-k="rev_p">Proj $</th>
-          <th data-k="roas">ROAS</th>
+          <th data-k="roas">ROAS Conf</th>
+          <th data-k="roas_p">ROAS Proj</th>
         </tr></thead><tbody id="adx-cbody"></tbody></table>
       </div>
       <p class="adx-foot" id="adx-cfoot"></p>
@@ -254,7 +253,8 @@ export function renderBody(data) {
           <th data-k="cps">Cost/Sale</th>
           <th data-k="rev_c">Conf $</th>
           <th data-k="rev_p">Proj $</th>
-          <th data-k="roas">ROAS</th>
+          <th data-k="roas">ROAS Conf</th>
+          <th data-k="roas_p">ROAS Proj</th>
         </tr></thead><tbody id="adx-sbody"></tbody></table>
       </div>
       <p class="adx-foot" id="adx-sfoot"></p>
@@ -383,7 +383,7 @@ export function renderBody(data) {
   var gen = DATA.generatedAt?new Date(DATA.generatedAt):null;
 
   document.getElementById('adx-metric').innerHTML =
-    [['roas','ROAS'],['spend','Spend'],['cpl','Cost / lead'],['confrev','Confirmed $'],['appt','Appt rate'],['sales','Sales']].map(function(x){
+    [['roas','ROAS Conf'],['roasp','ROAS Proj'],['spend','Spend'],['cpl','Cost / lead'],['confrev','Confirmed $'],['appt','Appt rate'],['sales','Sales']].map(function(x){
       return '<button class="f" data-m="'+x[0]+'" aria-pressed="'+(x[0]==='roas')+'">'+x[1]+'</button>';}).join('');
   document.querySelectorAll('#adx-metric button').forEach(function(b){
     b.onclick=function(){ metric=b.dataset.m;
@@ -421,7 +421,8 @@ export function renderBody(data) {
       {lbl:'Leads', val:nf(tot.leads), note:apptRate.toFixed(1)+'% booked'},
       {lbl:'Sales', val:nf(cur.totalSales), note:tot.sales+' from ads · '+cur.unattributedSales+' no ad creative'},
       {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:money(tot.rev_p)+' projected', rev:true},
-      {lbl:'ROAS (confirmed)', val:roas==null?'—':roas.toFixed(2)+'x', note:roasP==null?'by sale date':roasP.toFixed(2)+'x projected', rev:roas!=null&&roas>=1},
+      {lbl:'ROAS — Confirmed', val:roas==null?'—':roas.toFixed(2)+'x', note:'confirmed rev ÷ spend', rev:roas!=null&&roas>=1},
+      {lbl:'ROAS — Projected', val:roasP==null?'—':roasP.toFixed(2)+'x', note:'projected rev ÷ spend', rev:roasP!=null&&roasP>=1},
       {lbl:'Cost / Sale', val:tot.sales?money(tot.spend/tot.sales):'—', note:'spend ÷ sales'}
     ];
     document.getElementById('adx-kpis').innerHTML=kpis.map(function(k){
@@ -468,7 +469,7 @@ export function renderBody(data) {
     var body=document.getElementById('adx-activebody');
     var empty=document.getElementById('adx-active-empty');
     empty.hidden = watch.length>0;
-    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,appts:0,spend:0,sales:0,rev_c:0,rev_p:0,roas:null,_none:true};});
+    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,appts:0,spend:0,sales:0,rev_c:0,rev_p:0,roas:null,roas_p:null,_none:true};});
     rows.sort(function(a,b){return b.spend-a.spend||b.rev_c-a.rev_c||b.leads-a.leads;});
     body.innerHTML=rows.map(function(r){
       return '<tr><td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+'</span></td>'
@@ -477,24 +478,27 @@ export function renderBody(data) {
         +'<td class="num">'+(r._none?'—':r.sales)+'</td>'
         +'<td class="num">'+(r._none?'—':(r.rev_c?money(r.rev_c):'$0'))+'</td>'
         +'<td class="num">'+(r._none?'—':(r.rev_p?money(r.rev_p):'$0'))+'</td>'
-        +'<td class="num">'+(r._none?'—':(r.roas==null?'—':r.roas.toFixed(2)+'x'))+'</td></tr>';
+        +'<td class="num">'+(r._none?'—':(r.roas==null?'—':r.roas.toFixed(2)+'x'))+'</td>'
+        +'<td class="num">'+(r._none?'—':(r.roas_p==null?'—':r.roas_p.toFixed(2)+'x'))+'</td></tr>';
     }).join('');
   }
 
   function metricVal(r){
     if(metric==='roas')return r.roas==null?-1:r.roas;
+    if(metric==='roasp')return r.roas_p==null?-1:r.roas_p;
     if(metric==='spend')return r.spend;
     if(metric==='cpl')return r.cpl==null?-1:r.cpl;
     if(metric==='confrev')return r.rev_c;
     if(metric==='sales')return r.sales; return r.appt_rate; }
   function metricFmt(r){
     if(metric==='roas')return r.roas==null?'—':r.roas.toFixed(2)+'x';
+    if(metric==='roasp')return r.roas_p==null?'—':r.roas_p.toFixed(2)+'x';
     if(metric==='spend')return money(r.spend);
     if(metric==='cpl')return r.cpl==null?'—':money(r.cpl);
     if(metric==='confrev')return money(r.rev_c);
     if(metric==='sales')return nf(r.sales); return metricVal(r)+'%'; }
   function drawBars(cur){
-    var spendMetric=(metric==='spend'||metric==='roas'||metric==='cpl');
+    var spendMetric=(metric==='spend'||metric==='roas'||metric==='roasp'||metric==='cpl');
     var list=cur.rows.filter(function(r){
       if(activeOnly&&watch.indexOf(r.ad)<0)return false;
       return spendMetric ? r.spend>0 : r.leads>=minLeads; });
@@ -531,12 +535,13 @@ export function renderBody(data) {
         +'<td class="num">'+(r.cpa==null?'—':money(r.cpa))+'</td>'
         +'<td class="num">'+r.sales+'</td><td class="num">'+(r.cps==null?'—':money(r.cps))+'</td>'
         +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td>'
-        +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td></tr>';
+        +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td>'
+        +'<td class="num">'+(r.roas_p==null?'—':r.roas_p.toFixed(2)+'x')+'</td></tr>';
     }).join('');
     if(cur.unattributedSales>0 && !search && !hideZero){
       html+='<tr class="unattr"><td>(No Ad Creative — organic / referral)</td>'
         +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
-        +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
+        +'<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">'+cur.unattributedSales+'</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td></tr>';
     }
     document.getElementById('adx-tbody').innerHTML=html;
     document.getElementById('adx-foot').textContent='Showing '+list.length+' of '+cur.rows.length+' ad creatives in range. Total sales incl. unattributed: '+cur.totalSales
@@ -588,20 +593,22 @@ export function renderBody(data) {
       +'<td class="num">'+r.appts+'</td><td class="num">'+(r.cpa==null?'—':money(r.cpa))+'</td>'
       +'<td class="num">'+r.sales+'</td><td class="num">'+(r.cps==null?'—':money(r.cps))+'</td>'
       +'<td class="num">'+(r.rev_c?money(r.rev_c):'—')+'</td><td class="num">'+(r.rev_p?money(r.rev_p):'—')+'</td>'
-      +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td>';
+      +'<td class="num">'+(r.roas==null?'—':r.roas.toFixed(2)+'x')+'</td>'
+      +'<td class="num">'+(r.roas_p==null?'—':r.roas_p.toFixed(2)+'x')+'</td>';
   }
   function renderGroups(){
     var crows=aggregateGroups('c'), srows=aggregateGroups('s');
     // KPIs (campaign level totals)
     var t={spend:0,leads:0,appts:0,sales:0,rev_c:0,rev_p:0};
     crows.forEach(function(r){t.spend+=r.spend;t.leads+=r.leads;t.appts+=r.appts;t.sales+=r.sales;t.rev_c+=r.rev_c;t.rev_p+=r.rev_p;});
-    var roas=t.spend?t.rev_c/t.spend:null;
+    var roas=t.spend?t.rev_c/t.spend:null, roasP=t.spend?t.rev_p/t.spend:null;
     var kp=[
       {lbl:'Ad Spend', val:money(t.spend), note:crows.length+' campaigns'},
       {lbl:'Leads', val:nf(t.leads), note:'from tracked ads'},
       {lbl:'Sales', val:nf(t.sales), note:'attributed'},
       {lbl:'Confirmed Revenue', val:money(t.rev_c), note:money(t.rev_p)+' projected', rev:true},
-      {lbl:'ROAS (confirmed)', val:roas==null?'—':roas.toFixed(2)+'x', note:t.spend?(t.rev_p/t.spend).toFixed(2)+'x projected':'', rev:roas!=null&&roas>=1},
+      {lbl:'ROAS — Confirmed', val:roas==null?'—':roas.toFixed(2)+'x', note:'confirmed rev ÷ spend', rev:roas!=null&&roas>=1},
+      {lbl:'ROAS — Projected', val:roasP==null?'—':roasP.toFixed(2)+'x', note:'projected rev ÷ spend', rev:roasP!=null&&roasP>=1},
       {lbl:'Cost / Sale', val:t.sales?money(t.spend/t.sales):'—', note:'spend ÷ sales'}
     ];
     document.getElementById('adx-ckpis').innerHTML=kp.map(function(k){
