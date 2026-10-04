@@ -296,14 +296,32 @@ function productionHeaderError(rows) {
 }
 
 // Aggregates rows into phone/name lookups. Several policies for one client sum together.
+// Dated revenue events for one matched client: [{d, p, c}], plus the first sale date.
+// Rows with no money are dropped; a row with no parsable date falls back to the caller's date.
+function revEvents(rev) {
+  if (!rev || !rev.rows) return null;
+  const rv = rev.rows
+    .filter(r => r.p || r.c)
+    .map(r => ({ d: r.d || null, p: Math.round(r.p * 100) / 100, c: Math.round(r.c * 100) / 100 }));
+  if (!rv.length) return null;
+  const dates = rv.map(r => r.d).filter(Boolean).sort();
+  return { rv, first: dates[0] || null };
+}
+
 function productionFromRows(rows, found) {
   const { hi, cols, ci, pi, fi, phi, di } = found;
   const byPhone = new Map(), byName = new Map();
+  // Each policy is kept as its own dated row. Summing a client's policies into one figure and
+  // stamping it with a single date put their whole lifetime revenue in the week of their most
+  // recent sale — so a week containing a repeat client was inflated by every earlier policy.
   const add = (map, key, proj, conf, sd) => {
     if (!key) return;
-    const cur = map.get(key) || { proj: 0, conf: 0, sd: null };
-    cur.proj += proj; cur.conf += conf; if (sd) cur.sd = sd; map.set(key, cur);
+    const cur = map.get(key) || { proj: 0, conf: 0, rows: [] };
+    cur.proj += proj; cur.conf += conf;
+    cur.rows.push({ d: sd, p: proj, c: conf });
+    map.set(key, cur);
   };
+  const phoneOwners = new Map(); // phone -> distinct client names on it
   const clientHdr = cols[ci];
   for (let i = hi + 1; i < rows.length; i++) {
     const r = rows[i]; const name = normName(r[ci]);
@@ -313,8 +331,20 @@ function productionFromRows(rows, found) {
     if (!proj && !conf) continue;
     const sd = di >= 0 ? parseDate(r[di]) : null;
     add(byName, name, proj, conf, sd);
-    if (phi >= 0) add(byPhone, phone10(r[phi]), proj, conf, sd);
+    if (phi >= 0) {
+      const ph = phone10(r[phi]);
+      if (ph) {
+        add(byPhone, ph, proj, conf, sd);
+        if (!phoneOwners.has(ph)) phoneOwners.set(ph, new Set());
+        phoneOwners.get(ph).add(name);
+      }
+    }
   }
+  // Spouses often share a number. Matching on it would hand each of them the household's whole
+  // revenue, so those numbers are dropped and the join falls back to the name.
+  let shared = 0;
+  for (const [ph, names] of phoneOwners) if (names.size > 1) { byPhone.delete(ph); shared++; }
+  if (shared) console.error(`production sheet: ${shared} phone number(s) cover more than one client — matching those by name instead`);
   return { byPhone, byName, clients: Math.max(byPhone.size, byName.size), connected: true };
 }
 
@@ -605,7 +635,10 @@ function build2(adContacts, saleContacts, va, t65, production) {
       t: t65B.booked.has(cid) ? 1 : 0, ts: t65B.showed.has(cid) ? 1 : 0, s: sale,
       pr, cr,
     };
-    if (rev && rev.sd) rec.sd = rev.sd; // sale date (App Date) — revenue & sales filter by this
+    // rv holds each policy on its own App Date, so a date range counts only the policies that
+    // fall inside it. sd is the first of those dates, and dates the sale itself.
+    const ev = revEvents(rev);
+    if (ev) { rec.rv = ev.rv; if (ev.first) rec.sd = ev.first; }
     contacts.push(rec);
   }
   // Sales without an Ad Creative (organic / referral / personal calendar). These carry revenue
@@ -618,7 +651,8 @@ function build2(adContacts, saleContacts, va, t65, production) {
       let rev = s.phone ? production.byPhone.get(s.phone) : null;
       if (!rev && s.name) rev = production.byName.get(s.name);
       const rec = { d: s.added, pr: rev ? Math.round(rev.proj * 100) / 100 : 0, cr: rev ? Math.round(rev.conf * 100) / 100 : 0 };
-      if (rev && rev.sd) rec.sd = rev.sd;
+      const ev = revEvents(rev);
+      if (ev) { rec.rv = ev.rv; if (ev.first) rec.sd = ev.first; }
       unProj += rec.pr; unConf += rec.cr;
       return rec;
     });

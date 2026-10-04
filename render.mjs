@@ -380,6 +380,17 @@ export function renderBody(data) {
       try{ localStorage.setItem('adx_metaonly', metaOnly?'1':'0'); }catch(e){}
       render(); };
   }
+  // Adds a contact's revenue to a row, policy by policy. Records built before per-policy dates
+  // existed carry a single pr/cr pair instead, so those still fall back to the one sale date.
+  function addRev(box, r){
+    if(r.rv){
+      for(var i=0;i<r.rv.length;i++){ var ev=r.rv[i];
+        if(inRange(ev.d||r.sd||r.d)){ box.rev_p+=ev.p||0; box.rev_c+=ev.c||0; } }
+      return;
+    }
+    if(inRange(r.sd||r.d)){ box.rev_p+=r.pr||0; box.rev_c+=r.cr||0; }
+  }
+
   // ---------- aggregation for current date range ----------
   function aggregate(){
     var m={}; // adName -> row
@@ -387,8 +398,11 @@ export function renderBody(data) {
     for(var j=0;j<C.length;j++){ var r=C[j]; var a=m[ADS[r.a]];
       // Leads & appointments: counted by lead arrival date.
       if(inRange(r.d)){ a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; }
-      // Sales & revenue: counted by SALE date (App Date), falling back to lead date if none.
-      if(inRange(r.sd||r.d)){ if(r.s)a.sales++; a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
+      // A sale is counted once, on its first App Date. Revenue is counted per policy, each on
+      // its own App Date — a client with policies in different weeks splits across those weeks
+      // instead of landing entirely in the week of their most recent one.
+      if(inRange(r.sd||r.d) && r.s) a.sales++;
+      addRev(a, r);
     }
     // Ad spend: counted on the day it was spent.
     for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
@@ -412,9 +426,11 @@ export function renderBody(data) {
       allRows.push(a);
       if(!metaOnly || isActive('ads', a.ad)) rows.push(a); }
     // Sales with no Ad Creative: counted, and priced, so the tiles reconcile to the sheet.
-    var unsale=0, unp=0, unc=0;
+    var unsale=0, unbox={rev_p:0,rev_c:0};
     for(var u=0;u<UNSALE.length;u++){ var us=UNSALE[u];
-      if(inRange(us.sd||us.d)){ unsale++; unp+=us.pr||0; unc+=us.cr||0; } }
+      if(inRange(us.sd||us.d)) unsale++;
+      addRev(unbox, us); }
+    var unp=unbox.rev_p, unc=unbox.rev_c;
     return {rows:rows, allRows:allRows, unattributedSales:unsale, unRevP:unp, unRevC:unc};
   }
 
