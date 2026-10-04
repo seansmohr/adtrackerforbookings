@@ -75,6 +75,51 @@ unavailable (no `META_ACCESS_TOKEN`, or the first boot before a refresh complete
 > went stale silently — new ads never showed up and switched-off ads never left — so the panel
 > disagreed with the KPIs above it. Nothing reads `localStorage['adx_watchlist']` any more.
 
+## Production sheet access
+
+Two ways to read revenue. The service account is preferred.
+
+### Service account (recommended)
+
+The sheet stays private, and the build requests **only the columns it needs** — Client,
+Projected Rev, Revenue, App Date, Phone Number — so the Medicare Number and Email columns are
+never transferred out of Google.
+
+1. In Google Cloud Console, pick or create a project and **enable the Google Sheets API**.
+2. Create a **service account**, then add a key: *Keys → Add key → JSON*. Download it.
+3. Copy the `client_email` from that file (it looks like
+   `something@project-id.iam.gserviceaccount.com`) and **share the Master Production Sheet with
+   it as Viewer**, the same as sharing with a person.
+4. In Railway set:
+
+   | Variable | Value |
+   |---|---|
+   | `GOOGLE_SERVICE_ACCOUNT_JSON` | the whole key file — raw JSON, or base64 of it |
+   | `PRODUCTION_SHEET_ID` | the id from the sheet URL, between `/d/` and `/edit` |
+   | `PRODUCTION_TAB` | tab name; defaults to `Production Sheet` |
+
+   Base64 (`base64 -w0 key.json`) is worth using: pasting a multi-line private key into a web
+   form often mangles the newlines. Both forms are accepted.
+
+Paste the key into Railway directly. It is a credential — it does not belong in this repo, in a
+commit, or in a chat message, and anything committed here is public on GitHub.
+
+The service account is a plain Google identity with no access of its own, so it sees nothing
+until you share something with it. If you would rather it could not reach the PHI columns even
+in principle, share a derived sheet instead: a new spreadsheet whose one tab is
+`=IMPORTRANGE("<master id>", "Production Sheet!C:C")` and so on for H, I, L, S. Point
+`PRODUCTION_SHEET_ID` at that, and share only that with the service account.
+
+### Published CSV (fallback)
+
+If `GOOGLE_SERVICE_ACCOUNT_JSON` is unset, the build falls back to `PRODUCTION_CSV_URL` — a
+*File → Share → Publish to web → CSV* link.
+
+Publish only a minimal helper tab this way. A published link is public to anyone who has it, so
+never publish a tab carrying Medicare numbers or client emails. This route also reads whatever
+that tab happens to contain, so a hand-maintained tab can drift from the Production Sheet — we
+found it missing a $68.40 policy that way.
+
 ## Refreshing with live data
 
 `dashboard.html` and `data/dashboard_data.json` are a snapshot. To pull fresh

@@ -18,6 +18,7 @@
 //   (calendars/events.readonly), View Custom Fields (locations/customFields.readonly)
 
 import fs from 'fs';
+import crypto from 'node:crypto';
 import { renderDoc } from './render.mjs';
 
 const API = 'https://services.leadconnectorhq.com';
@@ -78,8 +79,13 @@ const parseMoney = s => { const n = parseFloat(String(s == null ? '' : s).replac
 // Parse a sale date (App Date) into YYYY-MM-DD. Accepts M/D/YYYY or YYYY-MM-DD.
 const parseDate = s => {
   s = String(s == null ? '' : s).trim();
-  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  // The production sheet mixes m/d/yyyy and m/d/yy (e.g. "9/28/26"). A 2-digit year that failed
+  // to parse used to yield null, which silently fell back to the lead's creation date.
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})(?!\d)/);
+  if (m) {
+    const y = m[3].length === 2 ? String(2000 + Number(m[3])) : m[3];
+    return `${y}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  }
   m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return m ? m[0] : null;
 };
@@ -152,19 +158,108 @@ async function fetchSaleContacts() {
 // client name + phone + projected + confirmed revenue. Headers are matched
 // case-insensitively; override with PRODUCTION_CLIENT_COL / PRODUCTION_PHONE_COL /
 // PRODUCTION_PROJECTED_COL / PRODUCTION_CONFIRMED_COL if your headers differ.
-async function fetchProduction() {
-  const url = process.env.PRODUCTION_CSV_URL;
-  const empty = { byPhone: new Map(), byName: new Map(), clients: 0, connected: false };
-  if (!url) return empty;
-  const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
-  if (!res.ok) throw new Error(`production sheet ${res.status} ${res.statusText}`);
-  const text = await res.text();
-  if (/^\s*</.test(text)) {
-    throw new Error('production sheet URL returned HTML, not CSV. In Google Sheets use File → Share → '
-      + 'Publish to web → pick the tab → format CSV, and use that link (it ends in output=csv).');
+// ---------- Google Sheets via a service account ----------
+// Preferred over the published-CSV route: the sheet stays private, and we request only the
+// handful of columns we need, so the Medicare Number and Email columns are never transferred.
+//
+// Setup (see README): create a service account in Google Cloud, enable the Sheets API, share
+// the sheet with the service account's client_email as Viewer, then set in Railway:
+//   GOOGLE_SERVICE_ACCOUNT_JSON  the whole key file (raw JSON, or base64 of it)
+//   PRODUCTION_SHEET_ID          the spreadsheet id from its URL
+//   PRODUCTION_TAB               tab name, default "Production Sheet"
+function serviceAccount() {
+  let raw = (process.env.GOOGLE_SERVICE_ACCOUNT_JSON || '').trim();
+  if (!raw) return null;
+  // Base64 is accepted because pasting a multi-line private key into a dashboard mangles it.
+  if (!raw.startsWith('{')) {
+    try { raw = Buffer.from(raw, 'base64').toString('utf8').trim(); } catch { /* reported below */ }
   }
-  const rows = parseCSV(text);
+  let sa;
+  try { sa = JSON.parse(raw); } catch { throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON, nor base64 of JSON'); }
+  if (!sa.client_email || !sa.private_key) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON has no client_email / private_key');
+  sa.private_key = sa.private_key.replace(/\\n/g, '\n'); // survive escaped newlines
+  return sa;
+}
 
+const b64url = b => Buffer.from(b).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+async function googleAccessToken(sa) {
+  const aud = sa.token_uri || 'https://oauth2.googleapis.com/token';
+  const now = Math.floor(Date.now() / 1000);
+  const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/spreadsheets.readonly',
+    aud, iat: now, exp: now + 3600,
+  }));
+  const sig = b64url(crypto.createSign('RSA-SHA256').update(`${head}.${claim}`).sign(sa.private_key));
+  const res = await fetch(aud, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${head}.${claim}.${sig}` }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`Google token ${res.status}: ${body.slice(0, 200)}`);
+  const tok = JSON.parse(body).access_token;
+  if (!tok) throw new Error('Google token response had no access_token');
+  return tok;
+}
+
+const colLetter = i => { let s = '', n = i; for (;;) { s = String.fromCharCode(65 + (n % 26)) + s; if (n < 26) break; n = Math.floor(n / 26) - 1; } return s; };
+
+async function sheetsGet(token, id, ranges) {
+  const qs = ranges.map(r => `ranges=${encodeURIComponent(r)}`).join('&');
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(id)}/values:batchGet?${qs}&majorDimension=ROWS`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(45000) });
+  const body = await res.text();
+  if (!res.ok) {
+    const hint = res.status === 403
+      ? ` — share the sheet with ${process.env.GOOGLE_SA_EMAIL_HINT || "the service account's client_email"} as Viewer, and make sure the Google Sheets API is enabled in that project`
+      : res.status === 404 ? ' — check PRODUCTION_SHEET_ID' : '';
+    throw new Error(`Sheets API ${res.status}: ${body.slice(0, 200)}${hint}`);
+  }
+  return (JSON.parse(body).valueRanges || []).map(v => v.values || []);
+}
+
+async function fetchProductionViaApi(sa) {
+  const id = process.env.PRODUCTION_SHEET_ID;
+  if (!id) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is set but PRODUCTION_SHEET_ID is not');
+  const tab = process.env.PRODUCTION_TAB || 'Production Sheet';
+  const token = await googleAccessToken(sa);
+
+  // Headers first. Row 1 alone is the normal case and reads no client data at all; only if the
+  // headers sit lower do we look at rows 1-5.
+  let head = await sheetsGet(token, id, [`${tab}!1:1`]);
+  let found = productionCols(head[0] || [], 1);
+  if (!found) {
+    head = await sheetsGet(token, id, [`${tab}!1:5`]);
+    found = productionCols(head[0] || [], 5);
+    if (!found) throw productionHeaderError(head[0] || []);
+  }
+
+  // Now pull ONLY the columns we matched. Everything else — Medicare Number, Email, premiums —
+  // stays in Google and never reaches this process.
+  const idx = [found.ci, found.pi, found.fi, found.phi, found.di].filter(i => i >= 0);
+  const first = found.hi + 2; // 1-based, skipping the header row
+  const cols = await sheetsGet(token, id, idx.map(i => `${tab}!${colLetter(i)}${first}:${colLetter(i)}`));
+
+  // Reassemble sparse rows that keep their original column indices.
+  const n = Math.max(0, ...cols.map(c => c.length));
+  const rows = [];
+  rows[found.hi] = found.cols;
+  for (let r = 0; r < n; r++) {
+    const row = [];
+    idx.forEach((ci, k) => { row[ci] = (cols[k][r] || [])[0] || ''; });
+    rows[found.hi + 1 + r] = row;
+  }
+  const out = productionFromRows(rows, found);
+  out.source = `sheets-api:${tab}`;
+  return out;
+}
+
+// Locates the header row and the columns we care about. Shared by both sheet readers.
+function productionCols(rows, maxScan = 60) {
   // Column finder: optional explicit override (substring match), else fuzzy by keyword.
   const find = (cols, envName, any, not = []) => {
     const override = (process.env[envName] || '').toLowerCase().trim();
@@ -173,7 +268,7 @@ async function fetchProduction() {
   };
   // Find the header row: the first row that has a client/name column AND a revenue column.
   let hi = -1, cols = null, ci = -1, pi = -1, fi = -1, phi = -1, di = -1;
-  for (let i = 0; i < Math.min(rows.length, 60); i++) {
+  for (let i = 0; i < Math.min(rows.length, maxScan); i++) {
     const lc = rows[i].map(x => (x || '').trim().toLowerCase());
     const c = find(lc, 'PRODUCTION_CLIENT_COL', ['client', 'name'], ['agent', 'carrier', 'user', 'file']);
     const p = find(lc, 'PRODUCTION_PROJECTED_COL', ['projected'], ['commission']);
@@ -185,11 +280,19 @@ async function fetchProduction() {
       break;
     }
   }
-  if (hi < 0) {
-    const seen = rows.slice(0, 5).map(r => r.join(' | ')).join('  //  ').slice(0, 300);
-    throw new Error('production sheet: could not find a header row with a client column and a projected/confirmed '
-      + 'revenue column. Make sure the published tab is the one with those columns. First rows seen: ' + seen);
-  }
+  if (hi < 0) return null;
+  return { hi, cols, ci, pi, fi, phi, di };
+}
+
+function productionHeaderError(rows) {
+  const seen = rows.slice(0, 3).map(r => r.join(' | ')).join('  //  ').slice(0, 300);
+  return new Error('production sheet: could not find a header row with a client column and a projected/confirmed '
+    + 'revenue column. Make sure you are pointing at the tab with those columns. First rows seen: ' + seen);
+}
+
+// Aggregates rows into phone/name lookups. Several policies for one client sum together.
+function productionFromRows(rows, found) {
+  const { hi, cols, ci, pi, fi, phi, di } = found;
   const byPhone = new Map(), byName = new Map();
   const add = (map, key, proj, conf, sd) => {
     if (!key) return;
@@ -208,6 +311,38 @@ async function fetchProduction() {
     if (phi >= 0) add(byPhone, phone10(r[phi]), proj, conf, sd);
   }
   return { byPhone, byName, clients: Math.max(byPhone.size, byName.size), connected: true };
+}
+
+// Service account if configured, else the published CSV, else nothing.
+async function fetchProduction() {
+  const sa = serviceAccount();
+  if (sa) {
+    const out = await fetchProductionViaApi(sa);
+    console.error(`production sheet: ${out.clients} clients via Sheets API as ${sa.client_email}`);
+    return out;
+  }
+  if (process.env.PRODUCTION_CSV_URL) {
+    const out = await fetchProductionViaCsv();
+    console.error(`production sheet: ${out.clients} clients via published CSV`);
+    return out;
+  }
+  return { byPhone: new Map(), byName: new Map(), clients: 0, connected: false };
+}
+
+async function fetchProductionViaCsv() {
+  const res = await fetch(process.env.PRODUCTION_CSV_URL, { signal: AbortSignal.timeout(45000) });
+  if (!res.ok) throw new Error(`production sheet ${res.status} ${res.statusText}`);
+  const text = await res.text();
+  if (/^\s*</.test(text)) {
+    throw new Error('production sheet URL returned HTML, not CSV. In Google Sheets use File → Share → '
+      + 'Publish to web → pick the tab → format CSV, and use that link (it ends in output=csv).');
+  }
+  const rows = parseCSV(text);
+  const found = productionCols(rows);
+  if (!found) throw productionHeaderError(rows);
+  const out = productionFromRows(rows, found);
+  out.source = 'published-csv';
+  return out;
 }
 
 async function fetchEvents(calendarId, startMs, endMs) {
