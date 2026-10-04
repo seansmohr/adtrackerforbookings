@@ -95,8 +95,8 @@ never transferred out of Google.
    | Variable | Value |
    |---|---|
    | `GOOGLE_SERVICE_ACCOUNT_JSON` | the whole key file — raw JSON, or base64 of it |
-   | `PRODUCTION_SHEET_ID` | the id from the sheet URL, between `/d/` and `/edit` |
-   | `PRODUCTION_TAB` | tab name; defaults to `Production Sheet` |
+   | `PRODUCTION_SHEET_ID` | the id from the sheet URL, between `/d/` and `/edit`. For the Master Production Sheet: `1YVvXDVkLQmjQ8zgWlC_Ax-qiP9u8uh2wQfALA53KhOc` |
+   | `PRODUCTION_TAB` | tab name, matched exactly; defaults to `Production Sheet` |
 
    Base64 (`base64 -w0 key.json`) is worth using: pasting a multi-line private key into a web
    form often mangles the newlines. Both forms are accepted.

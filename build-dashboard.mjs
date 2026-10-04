@@ -206,6 +206,10 @@ async function googleAccessToken(sa) {
   return tok;
 }
 
+// A1 notation needs the sheet name quoted whenever it contains a space (as "Production Sheet"
+// does); an embedded apostrophe is escaped by doubling it. Quoting is harmless otherwise.
+const a1 = (tab, ref) => `'${String(tab).replace(/'/g, "''")}'!${ref}`;
+
 const colLetter = i => { let s = '', n = i; for (;;) { s = String.fromCharCode(65 + (n % 26)) + s; if (n < 26) break; n = Math.floor(n / 26) - 1; } return s; };
 
 async function sheetsGet(token, id, ranges) {
@@ -216,7 +220,8 @@ async function sheetsGet(token, id, ranges) {
   if (!res.ok) {
     const hint = res.status === 403
       ? ` — share the sheet with ${process.env.GOOGLE_SA_EMAIL_HINT || "the service account's client_email"} as Viewer, and make sure the Google Sheets API is enabled in that project`
-      : res.status === 404 ? ' — check PRODUCTION_SHEET_ID' : '';
+      : res.status === 404 ? ' — check PRODUCTION_SHEET_ID'
+      : res.status === 400 ? ` — check PRODUCTION_TAB matches a tab name exactly (asked for ${ranges[0]})` : '';
     throw new Error(`Sheets API ${res.status}: ${body.slice(0, 200)}${hint}`);
   }
   return (JSON.parse(body).valueRanges || []).map(v => v.values || []);
@@ -230,10 +235,10 @@ async function fetchProductionViaApi(sa) {
 
   // Headers first. Row 1 alone is the normal case and reads no client data at all; only if the
   // headers sit lower do we look at rows 1-5.
-  let head = await sheetsGet(token, id, [`${tab}!1:1`]);
+  let head = await sheetsGet(token, id, [a1(tab, '1:1')]);
   let found = productionCols(head[0] || [], 1);
   if (!found) {
-    head = await sheetsGet(token, id, [`${tab}!1:5`]);
+    head = await sheetsGet(token, id, [a1(tab, '1:5')]);
     found = productionCols(head[0] || [], 5);
     if (!found) throw productionHeaderError(head[0] || []);
   }
@@ -242,7 +247,7 @@ async function fetchProductionViaApi(sa) {
   // stays in Google and never reaches this process.
   const idx = [found.ci, found.pi, found.fi, found.phi, found.di].filter(i => i >= 0);
   const first = found.hi + 2; // 1-based, skipping the header row
-  const cols = await sheetsGet(token, id, idx.map(i => `${tab}!${colLetter(i)}${first}:${colLetter(i)}`));
+  const cols = await sheetsGet(token, id, idx.map(i => a1(tab, `${colLetter(i)}${first}:${colLetter(i)}`)));
 
   // Reassemble sparse rows that keep their original column indices.
   const n = Math.max(0, ...cols.map(c => c.length));
