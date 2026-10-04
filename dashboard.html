@@ -384,17 +384,19 @@
   function aggregate(){
     var m={}; // adName -> row
     for(var i=0;i<ADS.length;i++){ m[ADS[i]]={ad:ADS[i],group:groupOf(ADS[i]),leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0}; }
-    for(var j=0;j<C.length;j++){ var r=C[j]; if(!adAllowed(r.a))continue; var a=m[ADS[r.a]];
+    for(var j=0;j<C.length;j++){ var r=C[j]; var a=m[ADS[r.a]];
       // Leads & appointments: counted by lead arrival date.
       if(inRange(r.d)){ a.leads++; if(r.va)a.va++; if(r.vs)a.vs++; if(r.t)a.t++; if(r.ts)a.ts++; if(r.va||r.t)a.appts++; }
       // Sales & revenue: counted by SALE date (App Date), falling back to lead date if none.
       if(inRange(r.sd||r.d)){ if(r.s)a.sales++; a.rev_p+=r.pr||0; a.rev_c+=r.cr||0; }
     }
     // Ad spend: counted on the day it was spent.
-    for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d)||!adAllowed(sp.a))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
-    var rows=[];
+    for(var s=0;s<SPEND.length;s++){ var sp=SPEND[s]; if(!inRange(sp.d))continue; var ar=m[ADS[sp.a]]; if(ar) ar.spend+=sp.v; }
+    // allRows = every ad with activity in range, regardless of Meta status. The KPI tiles total
+    // these, so pausing an ad never erases the spend it incurred or the revenue it earned.
+    // rows = what the tables and charts list, which IS narrowed by the Active-in-Meta filter.
+    var rows=[], allRows=[];
     for(var k in m){ var a=m[k];
-      if(metaOnly && !isActive('ads', a.ad)) continue;
       if(a.leads===0 && a.sales===0 && a.rev_p===0 && a.rev_c===0 && a.appts===0 && a.spend===0)continue;
       a.spend=Math.round(a.spend*100)/100;
       a.showed=a.vs+a.ts;
@@ -407,9 +409,10 @@
       a.cps=(a.spend>0&&a.sales>0)?a.spend/a.sales:null;   // cost per sale
       a.roas=(a.spend>0)?a.rev_c/a.spend:null;             // confirmed revenue / spend
       a.roas_p=(a.spend>0)?a.rev_p/a.spend:null;           // projected revenue / spend
-      rows.push(a); }
+      allRows.push(a);
+      if(!metaOnly || isActive('ads', a.ad)) rows.push(a); }
     var unsale=0; for(var u=0;u<UNSALE.length;u++){ if(inRange(UNSALE[u].sd||UNSALE[u].d)) unsale++; }
-    return {rows:rows, unattributedSales:unsale};
+    return {rows:rows, allRows:allRows, unattributedSales:unsale};
   }
 
   // ---------- render ----------
@@ -437,13 +440,16 @@
   var cur=null;
   function render(){
     cur=aggregate();
+    // Headline totals cover every ad in range (see aggregate) — not just the ACTIVE ones.
     var tot={leads:0,va:0,vs:0,t:0,ts:0,appts:0,sales:0,rev_p:0,rev_c:0,spend:0};
-    cur.rows.forEach(function(r){tot.leads+=r.leads;tot.va+=r.va;tot.vs+=r.vs;tot.t+=r.t;tot.ts+=r.ts;tot.appts+=r.appts;tot.sales+=r.sales;tot.rev_p+=r.rev_p;tot.rev_c+=r.rev_c;tot.spend+=r.spend;});
+    cur.allRows.forEach(function(r){tot.leads+=r.leads;tot.va+=r.va;tot.vs+=r.vs;tot.t+=r.t;tot.ts+=r.ts;tot.appts+=r.appts;tot.sales+=r.sales;tot.rev_p+=r.rev_p;tot.rev_c+=r.rev_c;tot.spend+=r.spend;});
     tot.spend=Math.round(tot.spend*100)/100;
     cur.tot=tot; cur.totalSales=tot.sales+cur.unattributedSales;
 
     // subtitle + range label
-    document.getElementById('adx-sub').innerHTML='Mohr Insurance — GoHighLevel · <b>'+nf(tot.leads)+'</b> leads · <b>'+cur.rows.length+'</b> ad creatives in range'
+    var nHidden=cur.allRows.length-cur.rows.length;
+    document.getElementById('adx-sub').innerHTML='Mohr Insurance — GoHighLevel · <b>'+nf(tot.leads)+'</b> leads · <b>'+cur.allRows.length+'</b> ad creatives in range'
+      +(nHidden?' (<b>'+cur.rows.length+'</b> still active, '+nHidden+' paused)':'')
       +(gen?' · data as of '+gen.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+gen.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):'');
     document.getElementById('adx-rnglabel').textContent = (!from&&!to)?'All time':((from||'…')+'  →  '+(to||'…'));
 
@@ -467,6 +473,15 @@
     var byRev=cur.rows.slice().sort(function(a,b){return b.rev_c-a.rev_c;})[0];
     var bySpend=cur.rows.slice().sort(function(a,b){return b.spend-a.spend;})[0];
     var co='';
+    // Paused ads are dropped from the tables but still counted in the KPIs, so spell out the
+    // difference — otherwise their spend and revenue look like they went missing.
+    if(nHidden){
+      var h={spend:0,leads:0,sales:0,rev_c:0,rev_p:0};
+      cur.allRows.forEach(function(r){ if(cur.rows.indexOf(r)<0){h.spend+=r.spend;h.leads+=r.leads;h.sales+=r.sales;h.rev_c+=r.rev_c;h.rev_p+=r.rev_p;} });
+      co+='<b>Not in the tables below:</b> '+nHidden+' ad'+(nHidden>1?'s':'')+' paused in Meta but active in this range — '
+        +nf(h.leads)+' leads, '+h.sales+' sales, '+money(h.spend)+' spend, '+money(h.rev_c)+' confirmed / '+money(h.rev_p)+' projected. '
+        +'Counted in the totals above; untick “Active in Meta only” to see them. ';
+    }
     if(bestRoas) co+='<b>Best ROAS at spend:</b> “'+esc(bestRoas.ad)+'” — '+bestRoas.roas.toFixed(2)+'x ('+money(bestRoas.rev_c)+' on '+money(bestRoas.spend)+'). ';
     if(byRev&&byRev.rev_c>0) co+='<span class="pill"><b>Most revenue:</b> “'+esc(byRev.ad)+'” — '+money(byRev.rev_c)+' confirmed. </span>';
     if(bySpend&&bySpend.spend>0) co+='<span class="pill"><b>Highest spend:</b> “'+esc(bySpend.ad)+'” — '+money(bySpend.spend)+(bySpend.roas!=null?' ('+bySpend.roas.toFixed(2)+'x)':'')+'. </span>';
