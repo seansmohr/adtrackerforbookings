@@ -411,8 +411,11 @@ export function renderBody(data) {
       a.roas_p=(a.spend>0)?a.rev_p/a.spend:null;           // projected revenue / spend
       allRows.push(a);
       if(!metaOnly || isActive('ads', a.ad)) rows.push(a); }
-    var unsale=0; for(var u=0;u<UNSALE.length;u++){ if(inRange(UNSALE[u].sd||UNSALE[u].d)) unsale++; }
-    return {rows:rows, allRows:allRows, unattributedSales:unsale};
+    // Sales with no Ad Creative: counted, and priced, so the tiles reconcile to the sheet.
+    var unsale=0, unp=0, unc=0;
+    for(var u=0;u<UNSALE.length;u++){ var us=UNSALE[u];
+      if(inRange(us.sd||us.d)){ unsale++; unp+=us.pr||0; unc+=us.cr||0; } }
+    return {rows:rows, allRows:allRows, unattributedSales:unsale, unRevP:unp, unRevC:unc};
   }
 
   // ---------- render ----------
@@ -460,7 +463,10 @@ export function renderBody(data) {
       {lbl:'Ad Spend', val:money(tot.spend), note:(DATA.meta.spend_live?'Meta live':'snapshot')+(DATA.meta.spend_to?' · thru '+DATA.meta.spend_to.slice(5):'')},
       {lbl:'Leads', val:nf(tot.leads), note:apptRate.toFixed(1)+'% booked'},
       {lbl:'Sales', val:nf(cur.totalSales), note:tot.sales+' from ads · '+cur.unattributedSales+' no ad creative'},
-      {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:money(tot.rev_p)+' projected', rev:true},
+      {lbl:'Confirmed Revenue', val:money(tot.rev_c), note:money(tot.rev_p)+' projected'
+        +(cur.unRevP||cur.unRevC?' · +'+money(cur.unRevC)+'/'+money(cur.unRevP)+' no ad creative':''), rev:true},
+      {lbl:'Total Revenue', val:money(tot.rev_c+cur.unRevC), note:money(tot.rev_p+cur.unRevP)+' projected · ads + organic',
+        rev:true},
       {lbl:'ROAS — Confirmed', val:roas==null?'—':roas.toFixed(2)+'x', note:'confirmed rev ÷ spend', rev:roas!=null&&roas>=1},
       {lbl:'ROAS — Projected', val:roasP==null?'—':roasP.toFixed(2)+'x', note:'projected rev ÷ spend', rev:roasP!=null&&roasP>=1},
       {lbl:'Cost / Sale', val:tot.sales?money(tot.spend/tot.sales):'—', note:'spend ÷ sales'}

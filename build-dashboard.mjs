@@ -134,7 +134,12 @@ async function fetchSaleContacts() {
     if (contacts.length === 0) break;
     for (const c of contacts) {
       const cf = cfMap(c);
-      out.push({ id: c.id, ad: cf[AD_FIELD_ID] || null, added: day(c.dateAdded) });
+      out.push({
+        id: c.id, ad: cf[AD_FIELD_ID] || null, added: day(c.dateAdded),
+        // Needed to price the no-ad-creative sales against the production sheet.
+        name: normName(c.contactName || `${c.firstName || ''} ${c.lastName || ''}`),
+        phone: phone10(c.phone),
+      });
     }
     if (data.total && page * 100 >= data.total) break;
   }
@@ -463,10 +468,20 @@ function build2(adContacts, saleContacts, va, t65, production) {
     if (rev && rev.sd) rec.sd = rev.sd; // sale date (App Date) — revenue & sales filter by this
     contacts.push(rec);
   }
-  // sales without an Ad Creative (organic / referral) — for total reconciliation
+  // Sales without an Ad Creative (organic / referral / personal calendar). These carry revenue
+  // too, so look it up the same way — otherwise the dashboard can never reconcile to the
+  // production sheet, and that revenue is invisible rather than merely unattributed.
+  let unProj = 0, unConf = 0;
   const unattributedSales = saleContacts
     .filter(s => s.ad == null || s.ad === '')
-    .map(s => ({ d: s.added }));
+    .map(s => {
+      let rev = s.phone ? production.byPhone.get(s.phone) : null;
+      if (!rev && s.name) rev = production.byName.get(s.name);
+      const rec = { d: s.added, pr: rev ? Math.round(rev.proj * 100) / 100 : 0, cr: rev ? Math.round(rev.conf * 100) / 100 : 0 };
+      if (rev && rev.sd) rec.sd = rev.sd;
+      unProj += rec.pr; unConf += rec.cr;
+      return rec;
+    });
 
   return {
     generatedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
@@ -474,6 +489,8 @@ function build2(adContacts, saleContacts, va, t65, production) {
       locationId: LOCATION, va_calendar_id: VA_CAL_ID, t65_calendar_id: T65_CAL_ID,
       va_events: va.length, t65_events: t65.length,
       va_booking_contacts: vaB.booked.size, t65_booking_contacts: t65B.booked.size,
+      unattributed_rev_proj: Math.round(unProj * 100) / 100,
+      unattributed_rev_conf: Math.round(unConf * 100) / 100,
       total_sales: attributedSales + unattributedSales.length,
       attributed_sales: attributedSales, unattributed_sales: unattributedSales.length,
       revenue_projected: Math.round(revProj * 100) / 100,
