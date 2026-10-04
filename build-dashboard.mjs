@@ -322,7 +322,9 @@ async function fetchStatusFromMeta(token, acct) {
   const acctNum = String(acct).replace(/^act_/, '');
   const norm = s => String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
   const edges = { ads: 'ads', adsets: 'adsets', campaigns: 'campaigns' };
-  const out = { ads: {}, adsets: {}, campaigns: {} };
+  // `names` keeps Meta's original spelling per normalized key, so the dashboard can list the
+  // ACTIVE set using the names you see in Ads Manager even when GHL has no lead for them yet.
+  const out = { ads: {}, adsets: {}, campaigns: {}, names: { ads: {}, adsets: {}, campaigns: {} } };
   for (const [key, edge] of Object.entries(edges)) {
     let url = `https://graph.facebook.com/${ver}/act_${acctNum}/${edge}`
       + `?fields=name,effective_status&limit=300&access_token=${encodeURIComponent(token)}`;
@@ -330,7 +332,11 @@ async function fetchStatusFromMeta(token, acct) {
       const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
       if (!res.ok) { const b = await res.text().catch(() => ''); throw new Error(`Meta ${edge} status ${res.status} ${b.slice(0, 160)}`); }
       const j = await res.json();
-      for (const e of j.data || []) if (e.name) out[key][norm(e.name)] = e.effective_status || 'UNKNOWN';
+      for (const e of j.data || []) {
+        if (!e.name) continue;
+        out[key][norm(e.name)] = e.effective_status || 'UNKNOWN';
+        out.names[key][norm(e.name)] = e.name;
+      }
       url = j.paging && j.paging.next ? j.paging.next : null;
     }
   }

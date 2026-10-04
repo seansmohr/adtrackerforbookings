@@ -29,14 +29,15 @@ service (see **Deploying on Railway** below).
 - **KPI tiles** — leads, appointments booked (+ % of leads), VA appointments, Turning 65
   appointments, and sales. The Sales tile shows the **total** (e.g. `73`) and splits it into
   *from ads* vs *no ad creative* so it reconciles with GHL's overall sale count.
-- **Active ads** — your watchlist of currently-running ads with their live leads/appts/sales.
-  Add the exact Ad Creative value from GHL and its counts link automatically; remove with ×.
-  Seeded from `config.json` and saved per-browser in localStorage (see **Active ads** below).
+- **Active ads** — every ad whose Meta `effective_status` is `ACTIVE`, with its live
+  leads/appts/sales. Driven straight from Meta on each refresh: switch an ad off in Ads Manager
+  and it leaves the list, launch a new one and it appears. No manual upkeep (see **Active ads**
+  below). Its rows always sum to the KPI tiles above it.
 - **Which ads to scale** — ads ranked by the metric you choose: **Appt rate**, **Sales**, or
   **Sale rate**. Colored by ad family (Winning / Test / AI Test / Other). "Active ads only"
   and a "min leads" slider cut the noise.
-- **Full breakdown** — a sortable, searchable table of every ad creative (★ marks active
-  ads), plus a `(No Ad Creative)` row so the sales total reconciles:
+- **Full breakdown** — a sortable, searchable table of every ad creative (★ marks ads that
+  are ACTIVE in Meta), plus a `(No Ad Creative)` row so the sales total reconciles:
 
   | Column | Meaning |
   |--------|---------|
@@ -52,24 +53,27 @@ service (see **Deploying on Railway** below).
 
 Cancelled and deleted calendar events are excluded from the appointment counts.
 
-## Active ads (`config.json`)
+## Active ads
 
-`config.json` holds the ads you're currently running:
+The *Active ads* panel needs no maintenance: each refresh reads `effective_status` for every
+ad in the Meta ad account, and the panel lists the ones that come back `ACTIVE`. `PAUSED`,
+`CAMPAIGN_PAUSED`, `ADSET_PAUSED`, `DISAPPROVED` and `ARCHIVED` all count as off.
+
+Matching an ad to its leads is a string match on the **Ad Creative** custom field in GHL,
+normalized for case and extra spaces. A chip reading **no match in GHL yet** means the ad is
+live in Meta but no contact carries that Ad Creative value — either it hasn't produced a lead
+yet, or the value in GHL is spelled differently from the ad name in Meta.
+
+`config.json`'s `activeAds` list is now only a **fallback**, used if Meta status is
+unavailable (no `META_ACCESS_TOKEN`, or the first boot before a refresh completes):
 
 ```json
 { "activeAds": ["Winning Ad Non SAC | Never Free", "AI | Test ad | Still Working 1", ...] }
 ```
 
-These names must match the **Ad Creative** custom-field value in GHL **exactly** — including
-spacing and capitalization — because attribution is a literal string match. The dashboard
-flags any active-ad name that matches zero contacts (⚠ on the chip) so typos are easy to spot.
-
-Two ways to manage the list:
-
-- **In the browser** (fastest) — use the *Active ads* panel to add/remove. Changes save to
-  that browser's localStorage. Good for launching a new test ad and watching it immediately.
-- **In the repo** (shared defaults) — edit `config.json` and redeploy. This is what everyone
-  sees before they make personal tweaks, and what a fresh browser starts from.
+> This panel was previously a hand-curated watchlist saved in each browser's localStorage. It
+> went stale silently — new ads never showed up and switched-off ads never left — so the panel
+> disagreed with the KPIs above it. Nothing reads `localStorage['adx_watchlist']` any more.
 
 ## Refreshing with live data
 
@@ -207,7 +211,7 @@ The dashboard has two views, switched by the tabs under the title (your choice i
 remembered per browser). Both share the same date range.
 
 1. **Ad creatives** — performance per GHL *Ad Creative* value: leads, VA/T65 appointments,
-   sales, revenue, spend, ROAS, cost per lead/appt/sale, plus the active-ads watchlist.
+   sales, revenue, spend, ROAS, cost per lead/appt/sale, plus each ad's Meta status.
 2. **Campaigns & ad sets** — the same economics one and two levels up the Meta hierarchy:
    **campaign ROAS** and **ad set ROAS**. Spend comes straight from Meta at that level;
    leads / appointments / sales / revenue are rolled up from the ad creatives inside each

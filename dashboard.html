@@ -78,15 +78,11 @@
   .adx-controls input[type=search]{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:inherit;font-size:0.82rem;color:var(--text-primary);min-width:170px;}
 
   .adx-watch{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;}
-  .adx-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 6px 4px 11px;font-size:0.82rem;color:var(--text-primary);}
+  .adx-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:4px 11px;font-size:0.82rem;color:var(--text-primary);}
   .adx-chip.warn{border-color:var(--star);}
   .adx-chip .cnt{color:var(--text-muted);font-variant-numeric:tabular-nums;}
-  .adx-chip button{border:0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1;padding:0 2px;border-radius:50%;}
-  .adx-chip button:hover{color:var(--text-primary);}
-  .adx-addwrap{display:inline-flex;gap:6px;align-items:center;}
-  .adx-addwrap input{background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:6px 10px;font:inherit;font-size:0.82rem;color:var(--text-primary);min-width:230px;}
-  .adx-addwrap button, .adx-linkbtn{border:1px solid var(--border);background:var(--surface-2);color:var(--text-primary);font:inherit;font-size:0.8rem;font-weight:550;padding:6px 12px;border-radius:8px;cursor:pointer;}
-  .adx-addwrap button:hover,.adx-linkbtn:hover{border-color:var(--accent);}
+  .adx-linkbtn{border:1px solid var(--border);background:var(--surface-2);color:var(--text-primary);font:inherit;font-size:0.8rem;font-weight:550;padding:6px 12px;border-radius:8px;cursor:pointer;}
+  .adx-linkbtn:hover{border-color:var(--accent);}
 
   .adx-bars{display:flex;flex-direction:column;gap:7px;}
   .adx-bar{display:grid;grid-template-columns:220px 1fr auto;align-items:center;gap:12px;}
@@ -145,15 +141,15 @@
   <div class="adx-callout" id="adx-callout"></div>
 
   <div class="adx-panel">
-    <h2>Active ads <span style="font-weight:400;color:var(--text-muted);font-size:0.85rem">— the ones you're running now</span></h2>
-    <p class="phint">Your watchlist. Add the exact Ad Creative value from GHL and its counts link automatically. Saved in this browser; edit <code>config.json</code> in the repo to change the shared defaults.</p>
+    <h2>Active ads <span style="font-weight:400;color:var(--text-muted);font-size:0.85rem">— every ad currently ACTIVE in Meta Ads Manager, updated on each refresh</span></h2>
+    <p class="phint">Pulled straight from Meta — switch an ad off in Ads Manager and it drops off this list on the next refresh; launch a new one and it appears. A chip reading <em>no match in GHL yet</em> means the ad is live in Meta but no GHL contact carries that exact Ad Creative value.</p>
     <div class="adx-watch" id="adx-watch"></div>
     <div class="adx-tablewrap">
       <table class="adx-t" id="adx-activetable"><thead><tr>
         <th>Active ad</th><th>Leads</th><th>Appts</th><th>Spend</th><th>Sales</th><th>Conf $</th><th>Proj $</th><th>ROAS Conf</th><th>ROAS Proj</th>
       </tr></thead><tbody id="adx-activebody"></tbody></table>
     </div>
-    <p class="adx-empty" id="adx-active-empty" hidden>No active ads yet — add one above.</p>
+    <p class="adx-empty" id="adx-active-empty" hidden>No ads are ACTIVE in Meta Ads Manager right now.</p>
   </div>
 
   <div class="adx-panel">
@@ -263,7 +259,6 @@
     </div>
   </div><!-- /view: campaigns -->
 
-  <datalist id="adx-adlist"></datalist>
 </div></div>
 
 <script>
@@ -335,18 +330,9 @@
       });
   };
 
-  // ---------- watchlist (active ads) ----------
-  var LSKEY='adx_watchlist';
-  var watch;
-  try{ watch = JSON.parse(localStorage.getItem(LSKEY)); }catch(e){ watch=null; }
-  if(!Array.isArray(watch)) watch = (DATA.activeAds||[]).slice();
-  function saveWatch(){ try{localStorage.setItem(LSKEY, JSON.stringify(watch));}catch(e){} }
-  var watchSet = function(){ return watch; };
-  document.getElementById('adx-adlist').innerHTML = ADS.map(function(a){return '<option value="'+esc(a)+'">';}).join('');
-
-  // leads-per-ad over ALL time (for watchlist match warnings)
+  // leads-per-ad over ALL time (for the "no match in GHL yet" warning)
   var leadsAllByAd = {};
-  C.forEach(function(r){ var ad=ADS[r.a]; leadsAllByAd[ad]=(leadsAllByAd[ad]||0)+1; });
+  C.forEach(function(r){ var k=nkey(ADS[r.a]); leadsAllByAd[k]=(leadsAllByAd[k]||0)+1; });
 
   var SPEND = DATA.spend || [];
 
@@ -362,6 +348,23 @@
   // NOTE: this string is emitted inside a template literal — \s keeps the s in the output.
   function nkey(s){ return String(s==null?'':s).toLowerCase().replace(/\s+/g,' ').trim(); }
   function adAllowed(adIdx){ return !metaOnly || isActive('ads', ADS[adIdx]); }
+
+  // ---------- the "Active ads" list, driven live by Meta ----------
+  // This used to be a hand-curated watchlist saved in localStorage, which silently went stale:
+  // new ads never appeared and switched-off ads never left, so the panel disagreed with the KPIs.
+  // It is now simply every ad whose Meta effective_status is ACTIVE, recomputed on each refresh.
+  var ADKEY={}; for(var ai=0;ai<ADS.length;ai++){ ADKEY[nkey(ADS[ai])]=ADS[ai]; }
+  function prettyKey(k){ return k.replace(/(^|[\s|])([a-z])/g,function(m,p,c){return p+c.toUpperCase();}); }
+  var watch=(function(){
+    var st=STATUS.ads||{}, nm=(STATUS.names&&STATUS.names.ads)||{}, out=[];
+    for(var k in st){ if(st[k]!=='ACTIVE')continue;
+      // Prefer GHL's spelling (it is what the lead rows key on), then Meta's, then the key.
+      out.push(ADKEY[k]||nm[k]||prettyKey(k)); }
+    // No Meta status at all (token missing / first boot) — fall back to the config.json seed.
+    return out.length?out:(DATA.activeAds||[]).slice();
+  })();
+  var watchKeys={}; watch.forEach(function(a){ watchKeys[nkey(a)]=1; });
+  function inWatch(ad){ return !!watchKeys[nkey(ad)]; }
   // Shown only when the Active-only filter is off, so paused rows are obvious.
   function offTag(kind, name){
     if(metaOnly) return '';
@@ -473,26 +476,17 @@
     renderGroups();
   }
 
-  function rowByAd(cur){var m={};cur.rows.forEach(function(r){m[r.ad]=r;});return m;}
+  // Keyed on the normalized name so Meta's spelling still finds the GHL row.
+  function rowByAd(cur){var m={};cur.rows.forEach(function(r){m[nkey(r.ad)]=r;});return m;}
 
   function drawWatch(cur){
     var m=rowByAd(cur);
     var host=document.getElementById('adx-watch');
-    var chips=watch.map(function(ad){
-      var row=m[ad]; var everLeads=leadsAllByAd[ad]||0;
-      var warn = everLeads===0;
+    host.innerHTML = watch.map(function(ad){
+      var row=m[nkey(ad)]; var warn=(leadsAllByAd[nkey(ad)]||0)===0;
       var cnt = row? (nf(row.leads)+' leads · '+row.sales+' sales') : (warn?'no match in GHL yet':'0 in range');
-      return '<span class="adx-chip'+(warn?' warn':'')+'" title="'+esc(ad)+'">'+esc(ad)+' <span class="cnt">'+cnt+'</span>'
-        +'<button data-rm="'+esc(ad)+'" aria-label="Remove">×</button></span>';
+      return '<span class="adx-chip'+(warn?' warn':'')+'" title="'+esc(ad)+'">'+esc(ad)+' <span class="cnt">'+cnt+'</span></span>';
     }).join('');
-    host.innerHTML = chips
-      + '<span class="adx-addwrap"><input id="adx-addinput" list="adx-adlist" placeholder="Add exact Ad Creative name…"><button id="adx-addbtn">Add</button></span>'
-      + '<button class="adx-linkbtn" id="adx-reset" title="Reset to config.json defaults">Reset</button>';
-    host.querySelectorAll('button[data-rm]').forEach(function(b){b.onclick=function(){watch=watch.filter(function(x){return x!==b.dataset.rm;});saveWatch();render();};});
-    var addIn=document.getElementById('adx-addinput'), addBtn=document.getElementById('adx-addbtn');
-    function add(){var v=addIn.value.trim();if(v&&watch.indexOf(v)<0){watch.push(v);saveWatch();render();}}
-    addBtn.onclick=add; addIn.onkeydown=function(e){if(e.key==='Enter')add();};
-    document.getElementById('adx-reset').onclick=function(){watch=(DATA.activeAds||[]).slice();saveWatch();render();};
   }
 
   function drawActiveTable(cur){
@@ -500,7 +494,7 @@
     var body=document.getElementById('adx-activebody');
     var empty=document.getElementById('adx-active-empty');
     empty.hidden = watch.length>0;
-    var rows=watch.map(function(ad){return m[ad]||{ad:ad,group:groupOf(ad),leads:0,appts:0,spend:0,sales:0,rev_c:0,rev_p:0,roas:null,roas_p:null,_none:true};});
+    var rows=watch.map(function(ad){return m[nkey(ad)]||{ad:ad,group:groupOf(ad),leads:0,appts:0,spend:0,sales:0,rev_c:0,rev_p:0,roas:null,roas_p:null,_none:true};});
     rows.sort(function(a,b){return b.spend-a.spend||b.rev_c-a.rev_c||b.leads-a.leads;});
     body.innerHTML=rows.map(function(r){
       return '<tr><td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+'</span></td>'
@@ -531,7 +525,7 @@
   function drawBars(cur){
     var spendMetric=(metric==='spend'||metric==='roas'||metric==='roasp'||metric==='cpl');
     var list=cur.rows.filter(function(r){
-      if(activeOnly&&watch.indexOf(r.ad)<0)return false;
+      if(activeOnly&&!inWatch(r.ad))return false;
       return spendMetric ? r.spend>0 : r.leads>=minLeads; });
     list.sort(function(a,b){return metricVal(b)-metricVal(a);});
     var max=Math.max.apply(null,[1].concat(list.map(metricVal)));
@@ -556,7 +550,7 @@
     document.querySelectorAll('#adx-table thead th').forEach(function(th){th.classList.toggle('active',th.dataset.k===sortK);});
     var html=list.map(function(r){
       var mb=(r.leads/maxLeads*100).toFixed(1);
-      var star=watch.indexOf(r.ad)>=0?'<span class="adx-star" title="Active ad">★</span>':'';
+      var star=inWatch(r.ad)?'<span class="adx-star" title="Active ad">★</span>':'';
       return '<tr>'
         +'<td><span class="adx-name"><span class="adx-dot" style="background:'+GC[r.group]+'"></span>'+esc(r.ad)+star+offTag('ads',r.ad)+'</span>'
           +'<span class="adx-minibar"><i style="width:'+mb+'%;background:'+GC[r.group]+'"></i></span></td>'
