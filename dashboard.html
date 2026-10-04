@@ -722,9 +722,18 @@
     var w=document.getElementById('adx-spend-warn'); if(!w) return;
     if(DATA.meta && DATA.meta.spend_connected && !DATA.meta.spend_live){
       w.hidden=false;
-      w.textContent='⚠ Ad spend is a saved snapshot'+(DATA.meta.spend_to?' (through '+DATA.meta.spend_to+')':'')
-        +', not live from Meta'+(DATA.meta.spend_note?' — '+DATA.meta.spend_note:'')
-        +'. Set a valid META_ACCESS_TOKEN (ads_read, starts with “EAA”) in Railway to auto-update.';
+      // The page shipped in the repo is the fallback the server serves until the refresh it
+      // kicks off on boot lands. That is routine after a deploy and says nothing about the
+      // Meta token, so do not send anyone off to check their credentials over it.
+      var shipped = DATA.meta.spend_note && DATA.meta.spend_note.indexOf('committed snapshot') >= 0;
+      w.textContent = shipped
+        ? '⚠ Showing the saved snapshot that ships with the app'
+          +(gen?' (built '+gen.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+')':'')
+          +', not live data. This is normal for a minute or two after a deploy while the refresh runs — reload shortly. '
+          +'If it persists, press “↻ Refresh from GHL”, then check the service logs in Railway.'
+        : '⚠ Ad spend is a saved snapshot'+(DATA.meta.spend_to?' (through '+DATA.meta.spend_to+')':'')
+          +', not live from Meta'+(DATA.meta.spend_note?' — '+DATA.meta.spend_note:'')
+          +'. Set a valid META_ACCESS_TOKEN (ads_read, starts with “EAA”) in Railway to auto-update.';
     }
   })();
 
